@@ -127,8 +127,9 @@ export const tasks = {
     `).all(date);
 
     // Display-only rollover:
-    // when viewing today, also include unfinished tasks from previous days and
+    // when viewing today, include unfinished historical carry-over tasks and
     // mark them as `rolled` in the UI. No DB writes are performed.
+    // Fixed-day tasks are excluded from rolled display.
     if (date !== today()) return baseRows;
 
     const rolledRows = getDb().prepare(`
@@ -143,14 +144,10 @@ export const tasks = {
       WHERE t.deleted = 0
         AND t.archived = 0
         AND t.done = 0
+        AND t.task_type IN ('regular', 'due_date')
         AND t.start_date < ?
-        AND NOT (
-          t.task_type = 'future'
-          AND t.start_date <= ?
-          AND t.end_date >= ?
-        )
       ORDER BY t.priority ASC, t.id ASC
-    `).all(date, date, date);
+    `).all(date);
 
     return [...rolledRows, ...baseRows];
   },
