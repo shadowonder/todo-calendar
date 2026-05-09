@@ -219,43 +219,23 @@ export function useTasks(date) {
 
   /**
    * Reorder tasks via drag-and-drop.
-   * Accepts the new ordered array (already reordered optimistically in UI).
-   * Computes midpoint sort_order for the moved task and persists only that one update.
-   * If gap collapses (< 0.001), renormalizes the whole list.
+   * Accepts a reordered list for one group only:
+   * - group='normal' => current date tasks
+   * - group='rolled' => today's rolled tasks (display-only group)
    */
-  const reorderTask = useCallback(async (orderedTasks, movedId) => {
-    const idx = orderedTasks.findIndex((t) => t.id === movedId);
-    if (idx === -1) return;
+  const reorderTask = useCallback(async (orderedGroup, group = 'normal') => {
+    if (!Array.isArray(orderedGroup) || orderedGroup.length === 0) return;
 
-    const prev = orderedTasks[idx - 1];
-    const next = orderedTasks[idx + 1];
-    const prevOrder = prev?.sort_order ?? 0;
-    const nextOrder = next?.sort_order ?? prevOrder + 2;
-    const newOrder = (prevOrder + nextOrder) / 2;
+    const orderMap = new Map(orderedGroup.map((t, idx) => [t.id, idx + 1]));
+    setTasks((prev) => prev.map((t) => (orderMap.has(t.id) ? { ...t, sort_order: orderMap.get(t.id) } : t)));
 
-    // Renormalize if gap too small
-    if (Math.abs(nextOrder - prevOrder) < 0.001) {
-      const renormalized = orderedTasks.map((t, i) => ({ ...t, sort_order: i + 1.0 }));
-      setTasks(renormalized);
-      if (getIsElectron()) {
-        for (const t of renormalized) {
-          await window.db.tasks.update(t.id, { sort_order: t.sort_order });
-        }
-      }
-      return;
-    }
-
-    // Optimistic update
-    const nextRows = getMemoryTasksForDate(date).map((t) => (t.id === movedId ? { ...t, sort_order: newOrder } : t));
     if (!getIsElectron()) {
+      const nextRows = getMemoryTasksForDate(date).map((t) => (orderMap.has(t.id) ? { ...t, sort_order: orderMap.get(t.id) } : t));
       setMemoryTasksForDate(date, nextRows);
-      setTasks(nextRows);
       return;
     }
 
-    setTasks(nextRows);
-
-    await window.db.tasks.update(movedId, { sort_order: newOrder });
+    await window.db.tasks.reorder(date, group, orderedGroup.map((t) => t.id));
   }, [date]);
 
   return { tasks, createTask, setDone, deleteTask, editTask, updateColor, togglePrioritized, reorderTask, reload };

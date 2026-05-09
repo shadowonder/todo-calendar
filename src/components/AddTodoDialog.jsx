@@ -38,7 +38,7 @@ import { TASK_COLORS } from '../constants/taskColors.js';
 
 // ── Task mode options ─────────────────────────────────────────────────────────
 const MODES = [
-  { value: 'carry_over', label: 'Carry Over', desc: 'Rolls to the next day until completed' },
+  { value: 'carry_over', label: 'Carry Over', desc: 'Incomplete past tasks also show in today list as rolled' },
   { value: 'fixed_day', label: 'Fixed Day', desc: 'Only appears on the selected date' },
   { value: 'date_range', label: 'Date Range', desc: 'Visible across a range of dates' },
 ];

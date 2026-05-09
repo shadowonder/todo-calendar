@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import {
-  Box, Typography, Paper, TextField, Button, List, ListItem,
+  Box, Typography, TextField, Button, List, ListItem,
   ListItemText, Divider, IconButton, Chip,
 } from '@mui/material';
 import { Delete as DeleteRoundedIcon, NoteAdd as NoteAddRoundedIcon } from '@mui/icons-material';
@@ -107,7 +107,6 @@ export default function NotesPage() {
     </Box>
   );
 }
-
 
 
 

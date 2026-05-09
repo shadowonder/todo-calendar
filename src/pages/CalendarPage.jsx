@@ -161,15 +161,12 @@ export default function CalendarPage() {
               const isSelected = dateStr === selectedDate;
               const dayTasks = gridTasksMap[dateStr] ?? [];
               const sortedDayTasks = dayTasks.slice().sort((a, b) => {
-                const ap = a.prioritized ?? 0;
-                const bp = b.prioritized ?? 0;
-                if (ap !== bp) return bp - ap;
-
                 const so = (a.sort_order ?? 0) - (b.sort_order ?? 0);
                 if (so !== 0) return so;
 
-                const pr = (a.priority ?? 0) - (b.priority ?? 0);
-                if (pr !== 0) return pr;
+                const ap = a.prioritized ?? 0;
+                const bp = b.prioritized ?? 0;
+                if (ap !== bp) return bp - ap;
 
                 return (a.id ?? 0) - (b.id ?? 0);
               });

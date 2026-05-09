@@ -167,20 +167,43 @@ export default function TaskPanel({ selectedDate, onMutate }) {
   };
 
   const displayTasks = (searchResults !== null ? searchResults : tasks).slice().sort((a, b) => {
-    const ap = a.prioritized ?? 0;
-    const bp = b.prioritized ?? 0;
-    if (ap !== bp) return bp - ap; // pinned first
+    const ar = a.entry_status === 'rolled' ? 1 : 0;
+    const br = b.entry_status === 'rolled' ? 1 : 0;
+    if (ar !== br) return br - ar; // rolled tasks always on top
+
     const so = (a.sort_order ?? 0) - (b.sort_order ?? 0); // manual order
     if (so !== 0) return so;
-    return (a.priority ?? 0) - (b.priority ?? 0); // older rolled tasks higher
+
+    const ap = a.prioritized ?? 0;
+    const bp = b.prioritized ?? 0;
+    if (ap !== bp) return bp - ap;
+
+    return (a.id ?? 0) - (b.id ?? 0);
   });
 
   const handleDragEnd = async ({ active, over }) => {
     if (!over || active.id === over.id) return;
+    if (searchResults !== null) return;
+
     const oldIdx = displayTasks.findIndex((t) => t.id === active.id);
     const newIdx = displayTasks.findIndex((t) => t.id === over.id);
-    const reordered = arrayMove(displayTasks, oldIdx, newIdx);
-    await reorderTask(reordered, active.id);
+    if (oldIdx === -1 || newIdx === -1) return;
+
+    const activeTask = displayTasks[oldIdx];
+    const overTask = displayTasks[newIdx];
+    const activeIsRolled = activeTask.entry_status === 'rolled';
+    const overIsRolled = overTask.entry_status === 'rolled';
+
+    // Keep groups separated: rolled and normal reorder independently.
+    if (activeIsRolled !== overIsRolled) return;
+
+    const groupTasks = displayTasks.filter((t) => (t.entry_status === 'rolled') === activeIsRolled);
+    const oldGroupIdx = groupTasks.findIndex((t) => t.id === active.id);
+    const newGroupIdx = groupTasks.findIndex((t) => t.id === over.id);
+    if (oldGroupIdx === -1 || newGroupIdx === -1) return;
+
+    const reorderedGroup = arrayMove(groupTasks, oldGroupIdx, newGroupIdx);
+    await reorderTask(reorderedGroup, activeIsRolled ? 'rolled' : 'normal');
     onMutate?.();
   };
 

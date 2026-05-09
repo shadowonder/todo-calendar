@@ -15,97 +15,64 @@ function logAction(type, entityType, entityId, description) {
   } catch (e) { console.error('[DB] logAction failed:', e); }
 }
 
+function formatYmd(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 /** Add days to a YYYY-MM-DD string, returns YYYY-MM-DD */
 function addDays(dateStr, n) {
   const d = new Date(dateStr + 'T00:00:00');
   d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
+  return formatYmd(d);
 }
 
 /** Today as YYYY-MM-DD */
 function today() {
-  return new Date().toISOString().slice(0, 10);
+  return formatYmd(new Date());
+}
+
+function nextEntrySortOrder(entryDate) {
+  const row = getDb()
+    .prepare(`SELECT MAX(sort_order) AS m FROM task_day_entries WHERE entry_date = ?`)
+    .get(entryDate);
+  return (row?.m ?? 0) + 1;
+}
+
+function ensureEntryForDate(taskId, entryDate) {
+  getDb().prepare(`
+    INSERT OR IGNORE INTO task_day_entries (task_id, entry_date, status, sort_order)
+    VALUES (?, ?, 'pending', ?)
+  `).run(taskId, entryDate, nextEntrySortOrder(entryDate));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ROLLOVER ENGINE  (Approach A — lazy, called before any date query)
+// ENTRY ENSURER
 //
 // For every active (!done, !archived, !deleted) task that should appear on
-// `date`, ensure a task_day_entry row exists. Mark previous pending entries
-// as 'rolled'. Mark overdue tasks accordingly.
+// `date`, ensure a task_day_entry row exists. This is not rollover logic.
 // ─────────────────────────────────────────────────────────────────────────────
 function ensureEntriesForDate(date) {
   const db = getDb();
 
-  // All active tasks whose window includes `date`
+  // Active tasks that should appear on `date` by their own schedule.
+  // Non-range tasks appear only on start_date.
   const candidates = db.prepare(`
     SELECT * FROM tasks
     WHERE deleted = 0
       AND archived = 0
       AND done = 0
       AND (
-        (task_type = 'regular'  AND start_date <= ?)
-     OR (task_type = 'one_day'  AND start_date = ?)
-     OR (task_type = 'due_date' AND start_date <= ? AND (due_date IS NULL OR due_date >= ?))
-     OR (task_type = 'future'   AND start_date <= ? AND end_date >= ?)
+        (task_type IN ('regular', 'one_day', 'due_date') AND start_date = ?)
+     OR (task_type = 'future' AND start_date <= ? AND end_date >= ?)
       )
-  `).all(date, date, date, date, date, date);
-
-  const insertEntry = db.prepare(`
-    INSERT OR IGNORE INTO task_day_entries (task_id, entry_date, status)
-    VALUES (?, ?, 'pending')
-  `);
-
-  const markRolled = db.prepare(`
-    UPDATE task_day_entries
-    SET status = 'rolled', updated_at = datetime('now')
-    WHERE task_id = ? AND entry_date < ? AND status = 'pending'
-  `);
-
-  const markOverdue = db.prepare(`
-    UPDATE task_day_entries
-    SET status = 'overdue', updated_at = datetime('now')
-    WHERE task_id = ? AND status = 'pending'
-  `);
+  `).all(date, date, date);
 
   for (const task of candidates) {
-    if (task.task_type === 'one_day') {
-      if (date === task.start_date) {
-        insertEntry.run(task.id, date);
-      } else if (date > task.start_date) {
-        markOverdue.run(task.id);
-      }
-    } else if (task.task_type === 'due_date' && task.due_date && date > task.due_date) {
-      markOverdue.run(task.id);
-    } else {
-      // regular / due_date (within window) / future — decrement priority on each rollover
-      const prevEntry = db.prepare(
-        `SELECT id FROM task_day_entries WHERE task_id = ? AND entry_date < ? AND status = 'pending' LIMIT 1`
-      ).get(task.id, date);
-      if (prevEntry) {
-        // Task is rolling over to a new day — decrement priority (lower = older = sorts higher)
-        db.prepare(`UPDATE tasks SET priority = priority - 1, updated_at = datetime('now') WHERE id = ?`).run(task.id);
-      }
-      markRolled.run(task.id, date);
-      insertEntry.run(task.id, date);
-    }
+    ensureEntryForDate(task.id, date);
   }
-}
-
-// Also handle overdue entries for tasks whose due_date has passed
-function ensureOverdueForDate(date) {
-  getDb().prepare(`
-    UPDATE task_day_entries
-    SET status = 'overdue', updated_at = datetime('now')
-    WHERE status = 'pending'
-      AND task_id IN (
-        SELECT id FROM tasks
-        WHERE task_type = 'due_date' AND due_date < ? AND done = 0
-        UNION
-        SELECT id FROM tasks
-        WHERE task_type = 'one_day' AND start_date < ? AND done = 0
-      )
-  `).run(date, date);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -136,20 +103,56 @@ export const tasks = {
 
   /**
    * Get all tasks (with their day entry) for a specific date.
-   * Runs lazy rollover before querying — ensures entries exist.
+   * Ensures entries exist before querying.
    */
   getByDate(date) {
     ensureEntriesForDate(date);
-    ensureOverdueForDate(date);
-    return getDb().prepare(`
-      SELECT t.*, e.id AS entry_id, e.status AS entry_status, e.note AS entry_note, e.entry_date
+    const baseRows = getDb().prepare(`
+      SELECT t.*,
+             e.id AS entry_id,
+             CASE WHEN e.status = 'done' THEN 'done' ELSE 'pending' END AS entry_status,
+             e.note AS entry_note,
+             e.entry_date,
+             e.sort_order AS sort_order
       FROM task_day_entries e
       JOIN tasks t ON t.id = e.task_id
       WHERE e.entry_date = ?
         AND t.deleted   = 0
         AND t.archived  = 0
-      ORDER BY e.created_at ASC
+        AND (
+          t.task_type = 'future'
+          OR e.entry_date = t.start_date
+        )
+      ORDER BY e.sort_order ASC, e.created_at ASC, e.id ASC
     `).all(date);
+
+    // Display-only rollover:
+    // when viewing today, also include unfinished tasks from previous days and
+    // mark them as `rolled` in the UI. No DB writes are performed.
+    if (date !== today()) return baseRows;
+
+    const rolledRows = getDb().prepare(`
+      SELECT
+        t.*,
+        NULL AS entry_id,
+        'rolled' AS entry_status,
+        NULL AS entry_note,
+        t.start_date AS entry_date,
+        t.priority AS sort_order
+      FROM tasks t
+      WHERE t.deleted = 0
+        AND t.archived = 0
+        AND t.done = 0
+        AND t.start_date < ?
+        AND NOT (
+          t.task_type = 'future'
+          AND t.start_date <= ?
+          AND t.end_date >= ?
+        )
+      ORDER BY t.priority ASC, t.id ASC
+    `).all(date, date, date);
+
+    return [...rolledRows, ...baseRows];
   },
 
   /**
@@ -161,7 +164,7 @@ export const tasks = {
     const start = `${yearMonth}-01`;
     // Compute last day of month
     const [y, m] = yearMonth.split('-').map(Number);
-    const end = new Date(y, m, 0).toISOString().slice(0, 10);
+    const end = formatYmd(new Date(y, m, 0));
 
     // Ensure entries exist for every day in the month up to today
     const todayStr = today();
@@ -170,16 +173,19 @@ export const tasks = {
       ensureEntriesForDate(cursor);
       cursor = addDays(cursor, 1);
     }
-    ensureOverdueForDate(todayStr);
 
     const rows = getDb().prepare(`
       SELECT e.entry_date, COUNT(*) AS count
       FROM task_day_entries e
       JOIN tasks t ON t.id = e.task_id
       WHERE e.entry_date >= ? AND e.entry_date <= ?
-        AND e.status IN ('pending', 'overdue')
+        AND t.done = 0
         AND t.deleted  = 0
         AND t.archived = 0
+        AND (
+          t.task_type = 'future'
+          OR e.entry_date = t.start_date
+        )
       GROUP BY e.entry_date
     `).all(start, end);
 
@@ -189,32 +195,35 @@ export const tasks = {
   },
 
   /**
-   * Get all tasks for a date range (used to populate the full calendar grid,
-   * including overflow days from prev/next month).
+   * Get all tasks for a date range (used by the 42-cell calendar grid).
    * Returns: { 'YYYY-MM-DD': [ { id, title, entry_status, done, prioritized, ... }, ... ], ... }
    * @param {string} startDate  first cell date, e.g. '2026-04-27'
    * @param {string} endDate    last  cell date, e.g. '2026-06-07'
    */
   getGridTasks(startDate, endDate) {
-    // Run rollover for every day in the range up to today so entries exist
+    // Ensure ledger entries exist for each date up to today.
     const todayStr = today();
     let cursor = startDate;
     while (cursor <= endDate && cursor <= todayStr) {
       ensureEntriesForDate(cursor);
       cursor = addDays(cursor, 1);
     }
-    ensureOverdueForDate(todayStr);
 
     const rows = getDb().prepare(`
       SELECT t.id, t.title, t.prioritized, t.done, t.task_type, t.color,
-             t.sort_order, t.priority,
-             e.entry_date, e.status AS entry_status
+             e.sort_order AS sort_order, t.priority,
+             e.entry_date,
+             CASE WHEN e.status = 'done' THEN 'done' ELSE 'pending' END AS entry_status
       FROM task_day_entries e
       JOIN tasks t ON t.id = e.task_id
       WHERE e.entry_date >= ? AND e.entry_date <= ?
         AND t.deleted  = 0
         AND t.archived = 0
-      ORDER BY e.entry_date ASC, t.prioritized DESC, t.sort_order ASC, t.priority ASC, t.id ASC
+        AND (
+          t.task_type = 'future'
+          OR e.entry_date = t.start_date
+        )
+      ORDER BY e.entry_date ASC, e.sort_order ASC, t.id ASC
     `).all(startDate, endDate);
 
     // Group by entry_date
@@ -243,34 +252,40 @@ export const tasks = {
    * @param {string} [p.due_date]       required for 'due_date'
    */
   create({ origin_date, title, description = '', tags = '',
-           task_type = 'regular', start_date, end_date = null, due_date = null,
-           prioritized = 0, color = null }) {
+    task_type = 'regular', start_date, end_date = null, due_date = null,
+    prioritized = 0, color = null }) {
     const sd = start_date || origin_date;
 
-    // Compute next sort_order for this day (max existing + 1.0)
-    const maxRow = getDb().prepare(`
+    // Keep task-level sort_order for legacy/read-only paths (search, exports).
+    // Day-level ordering is persisted in task_day_entries.sort_order.
+    const maxTaskSort = getDb().prepare(`
       SELECT MAX(sort_order) AS m FROM tasks
-      WHERE start_date = ? AND deleted = 0
-    `).get(sd);
-    const sort_order = (maxRow?.m ?? 0) + 1.0;
+      WHERE deleted = 0
+    `).get();
+    const sort_order = (maxTaskSort?.m ?? 0) + 1.0;
+
+    // Rolled-task display order (used when this task appears in today's rolled section).
+    const maxPriority = getDb().prepare(`
+      SELECT MAX(priority) AS m FROM tasks
+      WHERE deleted = 0
+    `).get();
+    const priority = (maxPriority?.m ?? 0) + 1;
 
     const result = getDb().prepare(`
       INSERT INTO tasks (task_type, title, description, tags, origin_date, start_date, end_date, due_date, priority, prioritized, sort_order, color)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
-    `).run(task_type, title, description, tags, origin_date, sd, end_date, due_date, prioritized ? 1 : 0, sort_order, color ?? null);
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(task_type, title, description, tags, origin_date, sd, end_date, due_date, priority, prioritized ? 1 : 0, sort_order, color ?? null);
 
     const id = result.lastInsertRowid;
 
-    // Insert first day entry on origin_date
-    getDb().prepare(`
-      INSERT OR IGNORE INTO task_day_entries (task_id, entry_date, status) VALUES (?, ?, 'pending')
-    `).run(id, origin_date);
+    // Insert first day entry on start_date
+    ensureEntryForDate(id, sd);
 
     // For future tasks: pre-populate entries for the full range
     if (task_type === 'future' && end_date) {
       let cursor = addDays(sd, 1);
       while (cursor <= end_date) {
-        getDb().prepare(`INSERT OR IGNORE INTO task_day_entries (task_id, entry_date, status) VALUES (?, ?, 'pending')`).run(id, cursor);
+        ensureEntryForDate(id, cursor);
         cursor = addDays(cursor, 1);
       }
     }
@@ -283,21 +298,52 @@ export const tasks = {
   update(id, { title, description, tags, due_date, end_date, task_type, priority, prioritized, sort_order, color } = {}) {
     const fields = [];
     const values = [];
-    if (title        !== undefined) { fields.push('title = ?');        values.push(title); }
-    if (description  !== undefined) { fields.push('description = ?');  values.push(description); }
-    if (tags         !== undefined) { fields.push('tags = ?');         values.push(tags); }
-    if (due_date     !== undefined) { fields.push('due_date = ?');     values.push(due_date); }
-    if (end_date     !== undefined) { fields.push('end_date = ?');     values.push(end_date); }
-    if (task_type    !== undefined) { fields.push('task_type = ?');    values.push(task_type); }
-    if (priority     !== undefined) { fields.push('priority = ?');     values.push(priority); }
-    if (prioritized  !== undefined) { fields.push('prioritized = ?');  values.push(prioritized ? 1 : 0); }
-    if (sort_order   !== undefined) { fields.push('sort_order = ?');   values.push(sort_order); }
-    if (color        !== undefined) { fields.push('color = ?');        values.push(color); }
+    if (title !== undefined) { fields.push('title = ?'); values.push(title); }
+    if (description !== undefined) { fields.push('description = ?'); values.push(description); }
+    if (tags !== undefined) { fields.push('tags = ?'); values.push(tags); }
+    if (due_date !== undefined) { fields.push('due_date = ?'); values.push(due_date); }
+    if (end_date !== undefined) { fields.push('end_date = ?'); values.push(end_date); }
+    if (task_type !== undefined) { fields.push('task_type = ?'); values.push(task_type); }
+    if (priority !== undefined) { fields.push('priority = ?'); values.push(priority); }
+    if (prioritized !== undefined) { fields.push('prioritized = ?'); values.push(prioritized ? 1 : 0); }
+    if (sort_order !== undefined) { fields.push('sort_order = ?'); values.push(sort_order); }
+    if (color !== undefined) { fields.push('color = ?'); values.push(color); }
     if (fields.length === 0) return;
     fields.push("updated_at = datetime('now')");
     values.push(id);
     getDb().prepare(`UPDATE tasks SET ${fields.join(', ')} WHERE id = ?`).run(...values);
     logAction('task.update', 'task', String(id), `Updated task #${id}`);
+  },
+
+  /**
+   * Persist manual order.
+   * group='normal': write per-day order into task_day_entries.sort_order
+   * group='rolled': write rolled-section order into tasks.priority
+   */
+  reorder(date, group, orderedIds = []) {
+    if (!Array.isArray(orderedIds) || orderedIds.length === 0) return;
+    const db = getDb();
+
+    if (group === 'rolled') {
+      const updatePriority = db.prepare(`UPDATE tasks SET priority = ?, updated_at = datetime('now') WHERE id = ?`);
+      const tx = db.transaction((ids) => {
+        ids.forEach((id, idx) => updatePriority.run(idx + 1, id));
+      });
+      tx(orderedIds);
+      logAction('task.reorder.rolled', 'task', String(orderedIds[0]), `Reordered ${orderedIds.length} rolled tasks`);
+      return;
+    }
+
+    const updateEntryOrder = db.prepare(`
+      UPDATE task_day_entries
+      SET sort_order = ?, updated_at = datetime('now')
+      WHERE task_id = ? AND entry_date = ?
+    `);
+    const tx = db.transaction((ids, entryDate) => {
+      ids.forEach((id, idx) => updateEntryOrder.run(idx + 1, id, entryDate));
+    });
+    tx(orderedIds, date);
+    logAction('task.reorder.day', 'task', String(orderedIds[0]), `Reordered ${orderedIds.length} tasks on ${date}`);
   },
 
   /**
@@ -406,7 +452,7 @@ export const logs = {
     if (level) return getDb().prepare('SELECT * FROM logs WHERE level = ? ORDER BY created_at DESC LIMIT ?').all(level, limit);
     return getDb().prepare('SELECT * FROM logs ORDER BY created_at DESC LIMIT ?').all(limit);
   },
-  info(c, m, d)  { this.write('info',  c, m, d); },
-  warn(c, m, d)  { this.write('warn',  c, m, d); },
+  info(c, m, d) { this.write('info', c, m, d); },
+  warn(c, m, d) { this.write('warn', c, m, d); },
   error(c, m, d) { this.write('error', c, m, d); },
 };

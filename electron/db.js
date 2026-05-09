@@ -6,6 +6,7 @@ import path from 'path';
 // DB location: <userData>/todo-calendar.db
 // ---------------------------------------------------------------------------
 let db;
+let cleanupInterval = null;
 
 export function getDb() {
   if (!db) throw new Error('Database not initialized. Call initDb() first.');
@@ -16,6 +17,8 @@ export function getDb() {
 // Initialize — called once from main.js at startup
 // ---------------------------------------------------------------------------
 export function initDb() {
+  if (db) return db;
+
   const dbPath = path.join(app.getPath('userData'), 'todo-calendar.db');
   db = new Database(dbPath);
 
@@ -49,10 +52,10 @@ function createTables() {
     -- 2. TASKS  (source of truth for every task)
     --
     --   task_type:
-    --     'regular'   — rolls to next day until done
-    --     'one_day'   — only shown on origin_date; becomes overdue if missed
-    --     'due_date'  — rolls daily until due_date; then overdue
-    --     'future'    — visible only between start_date and end_date
+    --     'regular'   — standard task; appears on its start_date
+    --     'one_day'   — fixed-day task; appears on its start_date
+    --     'due_date'  — task with due_date metadata; appears on its start_date
+    --     'future'    — visible between start_date and end_date
     --
     --   Lifecycle flags:
     --     done / done_at    — master completion
@@ -124,15 +127,16 @@ function createTables() {
     --   status:
     --     'pending'  — not yet done on this day
     --     'done'     — completed on this specific day
-    --     'rolled'   — carried forward to the next day (task was pending)
-    --     'overdue'  — past due_date or past one_day date, not completed
-    --     'skipped'  — user explicitly skipped this day
+    -- NOTE:
+    --   "rolled" is a display-only concept generated in query layer when viewing
+    --   today; it is not persisted into this table.
     -- -------------------------------------------------------------------------
     CREATE TABLE IF NOT EXISTS task_day_entries (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       task_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
       entry_date TEXT    NOT NULL,
       status     TEXT    NOT NULL DEFAULT 'pending',
+      sort_order REAL    NOT NULL DEFAULT 0,
       note       TEXT    DEFAULT NULL,
       created_at TEXT    NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT    NOT NULL DEFAULT (datetime('now')),
@@ -176,38 +180,63 @@ function createTables() {
 // Migrations — add columns to existing tables without breaking existing data
 // ---------------------------------------------------------------------------
 function migrateTables() {
-  const cols = db
+  const taskCols = db
     .prepare(`PRAGMA table_info(tasks)`)
     .all()
     .map((c) => c.name);
-  if (!cols.includes('priority')) {
-    db.exec(`ALTER TABLE tasks
-        ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`);
+  if (!taskCols.includes('priority')) {
+    db.exec(`ALTER TABLE tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`);
     db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority)`);
     console.log('[DB] Migration: added priority column to tasks');
   }
-  if (!cols.includes('prioritized')) {
-    db.exec(`ALTER TABLE tasks
-        ADD COLUMN prioritized INTEGER NOT NULL DEFAULT 0`);
+  if (!taskCols.includes('prioritized')) {
+    db.exec(`ALTER TABLE tasks ADD COLUMN prioritized INTEGER NOT NULL DEFAULT 0`);
     console.log('[DB] Migration: added prioritized column to tasks');
   }
-  if (!cols.includes('sort_order')) {
-    db.exec(`ALTER TABLE tasks
-        ADD COLUMN sort_order REAL NOT NULL DEFAULT 0`);
+  if (!taskCols.includes('sort_order')) {
+    db.exec(`ALTER TABLE tasks ADD COLUMN sort_order REAL NOT NULL DEFAULT 0`);
     db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_sort_order ON tasks(sort_order)`);
     console.log('[DB] Migration: added sort_order column to tasks');
   }
-  if (!cols.includes('color')) {
-    db.exec(`ALTER TABLE tasks
-        ADD COLUMN color TEXT DEFAULT NULL`);
+  if (!taskCols.includes('color')) {
+    db.exec(`ALTER TABLE tasks ADD COLUMN color TEXT DEFAULT NULL`);
     console.log('[DB] Migration: added color column to tasks');
   }
+
+  const entryCols = db
+    .prepare(`PRAGMA table_info(task_day_entries)`)
+    .all()
+    .map((c) => c.name);
+  if (!entryCols.includes('sort_order')) {
+    db.exec(`ALTER TABLE task_day_entries ADD COLUMN sort_order REAL NOT NULL DEFAULT 0`);
+
+    const dates = db.prepare(`SELECT DISTINCT entry_date FROM task_day_entries ORDER BY entry_date ASC`).all();
+    const pickIds = db.prepare(`
+      SELECT id
+      FROM task_day_entries
+      WHERE entry_date = ?
+      ORDER BY created_at ASC, id ASC
+    `);
+    const setOrder = db.prepare(`UPDATE task_day_entries SET sort_order = ? WHERE id = ?`);
+    const tx = db.transaction((rows) => {
+      for (const { entry_date } of rows) {
+        const ids = pickIds.all(entry_date);
+        ids.forEach((r, idx) => setOrder.run(idx + 1, r.id));
+      }
+    });
+    tx(dates);
+    console.log('[DB] Migration: added sort_order column to task_day_entries');
+  }
+
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_tde_sort_order ON task_day_entries(entry_date, sort_order)`);
 }
 
 // ---------------------------------------------------------------------------
 // Cleanup
 // ---------------------------------------------------------------------------
 function purgeOldData() {
+  if (!db) return;
+
   const a = db.prepare(`DELETE
                         FROM actions
                         WHERE created_at < datetime('now', '-7 days')`).run();
@@ -218,14 +247,21 @@ function purgeOldData() {
 }
 
 function scheduleCleanup() {
+  if (cleanupInterval) clearInterval(cleanupInterval);
+
   purgeOldData();
-  setInterval(purgeOldData, 6 * 60 * 60 * 1000);
+  cleanupInterval = setInterval(purgeOldData, 6 * 60 * 60 * 1000);
 }
 
 // ---------------------------------------------------------------------------
 // Close DB gracefully on app quit
 // ---------------------------------------------------------------------------
 export function closeDb() {
+  if (cleanupInterval) {
+    clearInterval(cleanupInterval);
+    cleanupInterval = null;
+  }
+
   if (db) {
     db.close();
     db = null;

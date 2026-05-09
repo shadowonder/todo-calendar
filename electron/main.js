@@ -1,8 +1,8 @@
-import { app, BrowserWindow } from 'electron';
-import { fileURLToPath } from 'url';
+import {app, BrowserWindow} from 'electron';
+import {fileURLToPath} from 'url';
 import path from 'path';
-import { initDb, closeDb } from './db.js';
-import { registerIpcHandlers } from './ipc-handlers.js';
+import {initDb, closeDb} from './db.js';
+import {registerIpcHandlers} from './ipc-handlers.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,7 +16,7 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, 'preload.cjs'),
     },
   });
 
@@ -41,11 +41,16 @@ app.whenReady().then(() => {
     // macOS: re-create window when dock icon is clicked
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+}).catch((err) => {
+  console.error('[App] Failed during startup:', err);
+  app.quit();
 });
 
 app.on('window-all-closed', () => {
-  closeDb();
-  if (process.platform !== 'darwin') app.quit();
+  if (process.platform !== 'darwin') {
+    closeDb();
+    app.quit();
+  }
 });
 
 app.on('before-quit', () => {

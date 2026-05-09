@@ -16,6 +16,7 @@ export function registerIpcHandlers() {
   ipcMain.handle('tasks:getById',       (_, id)                => tasks.getById(id));
   ipcMain.handle('tasks:create',        (_, data)       => tasks.create(data));
   ipcMain.handle('tasks:update',        (_, id, data)   => tasks.update(id, data));
+  ipcMain.handle('tasks:reorder',       (_, date, group, orderedIds) => tasks.reorder(date, group, orderedIds));
   ipcMain.handle('tasks:setDone',       (_, id, done, entryDate) => tasks.setDone(id, done, entryDate));
   ipcMain.handle('tasks:delete',        (_, id)         => tasks.delete(id));
   ipcMain.handle('tasks:archive',       (_, id)         => tasks.archive(id));

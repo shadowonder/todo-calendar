@@ -4,8 +4,6 @@ import { Settings as SettingsIcon } from '@mui/icons-material';
 import { useColorMode } from '../context/ThemeContext.jsx';
 import { useSettings } from '../context/SettingsContext.jsx';
 
-const isElectron = () => typeof window !== 'undefined' && !!window.db;
-
 export default function SettingsPage() {
   const { darkMode, toggleDarkMode } = useColorMode();
   const { defaultTaskType, setSetting } = useSettings();
