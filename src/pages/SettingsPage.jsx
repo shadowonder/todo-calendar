@@ -211,7 +211,7 @@ export default function SettingsPage() {
                     {`Current strategy: ${nativeTierLabel}`}
                   </Typography>
                   <Typography variant="caption" color="text.secondary" sx={{ mt: 0.35, display: 'block' }}>
-                    {'Note: if the selected model fails to load or memory is insufficient, we will automatically switch to a lower-memory model.'}
+                    {'Note: automatic downgrade is conservative. We only try Balanced when High fails to load; other profiles do not auto-downgrade unless you switch them manually.'}
                   </Typography>
                 </Box>
               )}

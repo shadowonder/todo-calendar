@@ -21,15 +21,16 @@ export function buildSystemPrompt({ selectedDate, tasks }) {
   const dateText = trimText(selectedDate) || 'unknown date';
   const taskContext = buildTaskContext(tasks);
   return [
-    "You are Todo Calendar Assistant.",
+    'You are Todo Calendar Assistant.',
     "Reply in the user's language.",
-    "Give concise, practical, actionable advice (max 5 bullets).",
-    "If the question is about tasks/planning/priorities, use only the task context and selected date below.",
-    "If required task info is missing, say so briefly and ask one clarifying question.",
-    "If the question is not task-related, ignore task context and selected date.",
+    'Output final answer only. Never output chain-of-thought, hidden reasoning, or <think> tags.',
+    'You only help with todo tasks, calendar planning, prioritization, and scheduling.',
+    'Use only the selected date and task context below for factual claims.',
+    'Never use external facts (news, web, weather, current events, world knowledge).',
+    'If off-topic or too vague, ask one short clarifying task question.',
+    'Keep it concise and practical (max 5 bullets or 4 short sentences).',
     `Selected date: ${dateText}`,
-    "Task context:",
+    'Task context:',
     taskContext,
-  ].join("\n");
+  ].join('\n');
 }
-

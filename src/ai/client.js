@@ -1,6 +1,6 @@
 import { buildSystemPrompt } from './prompt.js';
 import { askWithOpenAI } from './providers/openaiProvider.js';
-import { askWithWebLLM } from './providers/webllmProvider.js';
+import { askWithWebLLM, preloadWebLLM, unloadWebLLM } from './providers/webllmProvider.js';
 
 function normalizeMessages(messages) {
   if (!Array.isArray(messages)) return [];
@@ -26,6 +26,7 @@ export async function requestAssistantReply({
   tasks,
   messages,
   signal,
+  onStream,
 }) {
   const systemPrompt = buildSystemPrompt({ selectedDate, tasks });
   const normalizedMessages = normalizeMessages(messages);
@@ -35,6 +36,7 @@ export async function requestAssistantReply({
       connection,
       messages: normalizedMessages,
       systemPrompt,
+      onStream,
     });
   }
 
@@ -44,6 +46,7 @@ export async function requestAssistantReply({
       messages: normalizedMessages,
       systemPrompt,
       signal,
+      onStream,
     });
   }
 
@@ -54,3 +57,13 @@ export async function requestAssistantReply({
   throw new Error('Unknown AI connection type. Please check Settings.');
 }
 
+export async function preloadNativeModel(connection) {
+  if (connection?.type !== 'native') {
+    throw new Error('Only native connection supports local model preloading.');
+  }
+  return preloadWebLLM({ connection });
+}
+
+export async function releaseNativeModel() {
+  return unloadWebLLM();
+}

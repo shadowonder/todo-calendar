@@ -6,40 +6,41 @@ const FALLBACK_CONFIG = {
     defaultTier: 'balanced',
     deviceMemoryGB: [
       { min: 8, tier: 'high' },
-      { min: 4, tier: 'balanced' },
-      { min: 2, tier: 'light' },
+      { min: 6, tier: 'balanced' },
+      { min: 3, tier: 'light' },
       { min: 0, tier: 'tiny' },
     ],
     hardwareConcurrency: [
-      { min: 12, tier: 'balanced' },
-      { min: 6, tier: 'light' },
+      { min: 16, tier: 'high' },
+      { min: 8, tier: 'balanced' },
+      { min: 4, tier: 'light' },
       { min: 0, tier: 'tiny' },
     ],
   },
   tiers: [
     {
       id: 'high',
-      label: 'High Quality (5-8 GB)',
-      modelId: 'Llama-3.1-8B-Instruct-q4f16_1-MLC',
-      approxVramMB: 5001,
+      label: 'High Quality (5-6 GB)',
+      modelId: 'Qwen3-8B-q4f16_1-MLC',
+      approxVramMB: 5695.78,
     },
     {
       id: 'balanced',
-      label: 'Balanced (3-5 GB)',
+      label: 'Balanced (3-4 GB)',
       modelId: 'Phi-4-mini-instruct-q4f16_1-MLC',
       approxVramMB: 3437.58,
     },
     {
       id: 'light',
-      label: 'Lightweight (1-3 GB)',
-      modelId: 'Qwen2.5-1.5B-Instruct-q4f16_1-MLC',
-      approxVramMB: 1629.75,
+      label: 'Lightweight (2-3 GB)',
+      modelId: 'Qwen3.5-2B-q4f16_1-MLC',
+      approxVramMB: 2245.44,
     },
     {
       id: 'tiny',
-      label: 'Low Memory (0.5-1 GB)',
-      modelId: 'SmolLM2-360M-Instruct-q4f32_1-MLC',
-      approxVramMB: 579.61,
+      label: 'Low Memory (1-2 GB)',
+      modelId: 'Qwen3.5-0.8B-q4f16_1-MLC',
+      approxVramMB: 1629.49,
     },
   ],
 };
@@ -171,11 +172,12 @@ function getTierById(id) {
   return TIER_MAP.get(id) || TIER_MAP.get(NATIVE_MODEL_CONFIG.autoPolicy.defaultTier) || NATIVE_MODEL_TIERS[0];
 }
 
-function buildTierFallbackModelIds(tierId) {
-  const startIndex = Math.max(TIER_ORDER.indexOf(tierId), 0);
-  return TIER_ORDER.slice(startIndex)
-    .map((id) => getTierById(id)?.modelId)
-    .filter((id, index, list) => Boolean(id) && list.indexOf(id) === index);
+function resolveSimpleFallbackModelIds(selectedTierRecord) {
+  const selectedModel = selectedTierRecord?.modelId;
+  if (!selectedModel) return [];
+  if (selectedTierRecord.id !== 'high') return [selectedModel];
+  const balancedModel = getTierById('balanced')?.modelId;
+  return [selectedModel, balancedModel].filter((id, index, list) => Boolean(id) && list.indexOf(id) === index);
 }
 
 export function resolveNativeModelSelection(nativeConfig = {}, runtimeHints = getNativeRuntimeHints()) {
@@ -185,10 +187,11 @@ export function resolveNativeModelSelection(nativeConfig = {}, runtimeHints = ge
   const autoTier = pickAutoTier(runtimeHints);
   const selectedTier = tierPreference === AUTO_TIER_ID ? autoTier : tierPreference;
   const selectedTierRecord = getTierById(selectedTier);
+  const fallbackModelIds = resolveSimpleFallbackModelIds(selectedTierRecord);
 
   return {
     modelId: selectedTierRecord.modelId,
-    fallbackModelIds: buildTierFallbackModelIds(selectedTierRecord.id),
+    fallbackModelIds,
     tierPreference,
     selectedTier: selectedTierRecord.id,
     autoTier,

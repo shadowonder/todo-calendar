@@ -129,7 +129,10 @@ export default function TaskPanel({ selectedDate, onMutate }) {
   const [colorPopover, setColorPopover] = useState({ anchorEl: null, taskId: null });
   const [activeTab, setActiveTab] = useState(0); // 0=Chat, 1=Tasks
   const [chatInput, setChatInput] = useState('');
-  const { chatMessages, chatSending, providerLabel, sendMessage } = useAiChat({ selectedDate, tasks });
+  const { chatMessages, chatSending, providerLabel, runtimeMeta, sendMessage } = useAiChat({ selectedDate, tasks });
+  const providerRuntimeLabel = runtimeMeta?.model
+    ? `${providerLabel} • ${runtimeMeta.model}${runtimeMeta?.fallbackUsed ? ' (fallback)' : ''}`
+    : providerLabel;
   const chatBottomRef = useRef(null);
 
   useEffect(() => {
@@ -259,7 +262,7 @@ export default function TaskPanel({ selectedDate, onMutate }) {
               AI Chat
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              Provider: {providerLabel}
+              Provider: {providerRuntimeLabel}
             </Typography>
           </Box>
 
@@ -278,11 +281,45 @@ export default function TaskPanel({ selectedDate, onMutate }) {
                   bgcolor: m.role === 'user' ? 'primary.main' : 'action.hover',
                 }}
               >
+                {m.role === 'assistant' && m.streaming && typeof m.thinkingPreview === 'string' && m.thinkingPreview.trim() && (
+                  <Box
+                    sx={{
+                      mb: 0.7,
+                      px: 0.75,
+                      py: 0.55,
+                      borderRadius: 0.9,
+                      border: 1,
+                      borderColor: 'divider',
+                      bgcolor: 'background.paper',
+                    }}
+                  >
+                    <Typography
+                      variant="caption"
+                      sx={{ display: 'block', fontSize: 10.5, fontWeight: 700, color: 'text.secondary', mb: 0.2 }}
+                    >
+                      Thinking Preview
+                    </Typography>
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: 'text.secondary',
+                        whiteSpace: 'pre-line',
+                        display: '-webkit-box',
+                        WebkitLineClamp: 3,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      {m.thinkingPreview}
+                    </Typography>
+                  </Box>
+                )}
                 <Typography
                   variant="body2"
                   sx={{ whiteSpace: 'pre-wrap', color: m.role === 'user' ? 'primary.contrastText' : 'text.primary', fontSize: 12.5 }}
                 >
                   {m.text}
+                  {m.role === 'assistant' && m.streaming ? '▌' : ''}
                 </Typography>
               </Box>
             ))}

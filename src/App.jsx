@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import {
   Box, Drawer, List, ListItemButton, ListItemIcon, ListItemText,
-  IconButton, Tooltip, Divider, Typography, useTheme,
+  IconButton, Tooltip, Divider, Typography, Snackbar, Alert,
 } from '@mui/material';
 import {
   CalendarMonth as CalendarMonthIcon,
@@ -17,7 +17,9 @@ import {
 import CalendarPage from './pages/CalendarPage.jsx';
 import NotesPage from './pages/NotesPage.jsx';
 import SettingsPage from './pages/SettingsPage.jsx';
+import { preloadNativeModel, releaseNativeModel } from './ai/client.js';
 import { useColorMode } from './context/ThemeContext.jsx';
+import { useSettings } from './context/SettingsContext.jsx';
 
 const DRAWER_OPEN = 240;
 const DRAWER_CLOSED = 64;
@@ -33,7 +35,77 @@ export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
   const { darkMode, toggleDarkMode } = useColorMode();
-  const theme = useTheme();
+  const { aiConnection, isNativeMode } = useSettings();
+  const [nativeBanner, setNativeBanner] = useState({
+    open: false,
+    message: '',
+    severity: 'success',
+  });
+  const lastReadyModelRef = useRef('');
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!isNativeMode || location.pathname !== '/') {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const connection = {
+      type: 'native',
+      auth: { modelTier: aiConnection.native.modelTier },
+    };
+    void preloadNativeModel(connection)
+      .then((result) => {
+        if (cancelled || !result?.model) return;
+        if (lastReadyModelRef.current === result.model) return;
+
+        lastReadyModelRef.current = result.model;
+        setNativeBanner({
+          open: true,
+          message: result.fallbackUsed
+            ? `Native model ready with fallback: ${result.model}`
+            : `Native model ready: ${result.model}`,
+          severity: result.fallbackUsed ? 'warning' : 'success',
+        });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        const message = err instanceof Error && err.message
+          ? err.message
+          : 'Failed to load native model.';
+        setNativeBanner({
+          open: true,
+          message,
+          severity: 'error',
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isNativeMode, location.pathname, aiConnection.native.modelTier]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (isNativeMode) return () => {
+      cancelled = true;
+    };
+
+    void releaseNativeModel()
+      .then(() => {
+        if (cancelled) return;
+        lastReadyModelRef.current = '';
+      })
+      .catch(() => {
+        // Ignore release errors while switching provider mode.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isNativeMode]);
 
   // Sidebar is always dark in both modes — text is always light
   const sidebarBg    = darkMode ? '#0a0e17' : '#1e2640';
@@ -151,6 +223,20 @@ export default function App() {
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </Box>
+
+      <Snackbar
+        open={nativeBanner.open}
+        autoHideDuration={2600}
+        onClose={() => setNativeBanner((prev) => ({ ...prev, open: false }))}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          severity={nativeBanner.severity}
+          onClose={() => setNativeBanner((prev) => ({ ...prev, open: false }))}
+        >
+          {nativeBanner.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }
