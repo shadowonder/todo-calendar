@@ -85,10 +85,9 @@ export function useAiChat({ selectedDate, tasks }) {
         ),
       ]);
     } catch (err) {
-      const message =
-        err instanceof Error && err.message
-          ? err.message
-          : 'AI request failed.';
+      const message = effectiveAiConnection?.type === 'native'
+        ? 'Native AI is temporarily unavailable. Please retry or switch profile in Settings.'
+        : (err instanceof Error && err.message ? err.message : 'AI request failed.');
       setChatMessages((prev) =>
         prev.map((msg) =>
           msg.id === assistantMsgId

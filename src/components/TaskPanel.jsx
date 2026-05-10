@@ -29,6 +29,7 @@ import { useAiChat } from '../hooks/useAiChat.js';
 import AddTaskDialog from './AddTodoDialog.jsx';
 import { useSettings } from '../context/SettingsContext.jsx';
 import { resolveTaskColor } from '../constants/taskColors.js';
+import { getTierLabel } from '../ai/nativeModels.js';
 import TaskColorPopover from './TaskColorPopover.jsx';
 
 const isElectron = () => typeof window !== 'undefined' && !!window.db;
@@ -116,7 +117,7 @@ function OverflowTooltipText({ text }) {
   );
 }
 
-export default function TaskPanel({ selectedDate, onMutate }) {
+export default function TaskPanel({ selectedDate, onMutate, nativeChatStatus = { enabled: false, phase: 'idle', tier: '' } }) {
   const { tasks, createTask, setDone, deleteTask, editTask, updateColor, togglePrioritized, reorderTask } = useTasks(selectedDate);
   const { defaultTaskType } = useSettings();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
@@ -130,9 +131,29 @@ export default function TaskPanel({ selectedDate, onMutate }) {
   const [activeTab, setActiveTab] = useState(0); // 0=Chat, 1=Tasks
   const [chatInput, setChatInput] = useState('');
   const { chatMessages, chatSending, providerLabel, runtimeMeta, sendMessage } = useAiChat({ selectedDate, tasks });
-  const providerRuntimeLabel = runtimeMeta?.model
-    ? `${providerLabel} • ${runtimeMeta.model}${runtimeMeta?.fallbackUsed ? ' (fallback)' : ''}`
-    : providerLabel;
+  const providerRuntimeLabel = (() => {
+    if (!runtimeMeta) return providerLabel;
+    const tierLabel = typeof runtimeMeta?.selectedTier === 'string'
+      ? getTierLabel(runtimeMeta.selectedTier)
+      : '';
+    if (tierLabel) return `${providerLabel} • ${tierLabel}${runtimeMeta?.fallbackUsed ? ' (fallback active)' : ''}`;
+    return `${providerLabel}${runtimeMeta?.fallbackUsed ? ' (fallback active)' : ''}`;
+  })();
+  const nativeStatusDot = (() => {
+    if (!nativeChatStatus?.enabled) return null;
+    const phase = nativeChatStatus.phase;
+    if (phase === 'ready') {
+      const tierLabel = nativeChatStatus.tier ? getTierLabel(nativeChatStatus.tier) : '';
+      return { color: 'success.main', label: tierLabel ? `Profile ready: ${tierLabel}` : 'Profile ready' };
+    }
+    if (phase === 'loading') {
+      return { color: 'warning.main', label: 'Loading native model...' };
+    }
+    if (phase === 'error') {
+      return { color: 'error.main', label: 'Native model load failed' };
+    }
+    return { color: 'warning.main', label: 'Preparing native model...' };
+  })();
   const chatBottomRef = useRef(null);
 
   useEffect(() => {
@@ -258,9 +279,24 @@ export default function TaskPanel({ selectedDate, onMutate }) {
       {activeTab === 0 && (
         <>
           <Box sx={{ px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
-            <Typography variant="subtitle2" fontWeight={700}>
-              AI Chat
-            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
+              <Typography variant="subtitle2" fontWeight={700}>
+                AI Chat
+              </Typography>
+              {nativeStatusDot && (
+                <Tooltip title={nativeStatusDot.label}>
+                  <Box
+                    sx={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: '50%',
+                      bgcolor: nativeStatusDot.color,
+                      boxShadow: (theme) => `0 0 0 2px ${theme.palette.background.paper}`,
+                    }}
+                  />
+                </Tooltip>
+              )}
+            </Box>
             <Typography variant="caption" color="text.secondary">
               Provider: {providerRuntimeLabel}
             </Typography>

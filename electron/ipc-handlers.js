@@ -5,6 +5,7 @@
  */
 import { ipcMain } from 'electron';
 import { tasks, config, actions, logs } from './db-service.js';
+import { chatOpenAI } from './ai-service.js';
 
 export function registerIpcHandlers() {
   // -----------------------------------------------------------------------
@@ -44,4 +45,9 @@ export function registerIpcHandlers() {
   // -----------------------------------------------------------------------
   ipcMain.handle('logs:getRecent', (_, limit, level)               => logs.getRecent(limit, level));
   ipcMain.handle('logs:write',     (_, level, category, msg, detail) => logs.write(level, category, msg, detail));
+
+  // -----------------------------------------------------------------------
+  // AI (remote request via main process to avoid renderer CORS limits)
+  // -----------------------------------------------------------------------
+  ipcMain.handle('ai:chatOpenAI', (_, payload) => chatOpenAI(payload));
 }

@@ -44,4 +44,9 @@ contextBridge.exposeInMainWorld('db', {
     warn: (cat, msg, detail) => ipcRenderer.invoke('logs:write', 'warn', cat, msg, detail),
     error: (cat, msg, detail) => ipcRenderer.invoke('logs:write', 'error', cat, msg, detail),
   },
+
+  // AI
+  ai: {
+    chatOpenAI: (payload) => ipcRenderer.invoke('ai:chatOpenAI', payload),
+  },
 });

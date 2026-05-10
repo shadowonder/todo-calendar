@@ -41,6 +41,7 @@ export default function SettingsPage() {
     setSetting,
     setNativeMode,
     setAiModelUrl,
+    setAiModelVersion,
     setAiConnectionType,
     updateAiNative,
     updateAiApiKey,
@@ -230,6 +231,18 @@ export default function SettingsPage() {
                     sx={{ mt: 1.2 }}
                   />
 
+                  <TextField
+                    fullWidth
+                    size="small"
+                    label="Model Version"
+                    placeholder="gpt-4.1-mini"
+                    value={aiConnection.modelVersion}
+                    onChange={(e) => {
+                      void setAiModelVersion(e.target.value);
+                    }}
+                    sx={{ mt: 1.2 }}
+                  />
+
                   <Box sx={{ mt: 1.5, border: 1, borderColor: 'divider', borderRadius: 1.5, overflow: 'hidden' }}>
                     <Tabs
                       value={connectionTab}
@@ -247,29 +260,17 @@ export default function SettingsPage() {
 
                     <Box sx={{ p: 1.5, display: 'grid', gap: 1.2 }}>
                       {connectionTab === 0 && (
-                        <>
-                          <TextField
-                            fullWidth
-                            size="small"
-                            label="Auth URL"
-                            placeholder="https://auth.example.com/apikey"
-                            value={aiConnection.apiKey.url}
-                            onChange={(e) => {
-                              void updateAiApiKey({ url: e.target.value });
-                            }}
-                          />
-                          <TextField
-                            fullWidth
-                            size="small"
-                            type="password"
-                            label="API Key"
-                            placeholder="sk-..."
-                            value={aiConnection.apiKey.key}
-                            onChange={(e) => {
-                              void updateAiApiKey({ key: e.target.value });
-                            }}
-                          />
-                        </>
+                        <TextField
+                          fullWidth
+                          size="small"
+                          type="password"
+                          label="API Key"
+                          placeholder="sk-..."
+                          value={aiConnection.apiKey.key}
+                          onChange={(e) => {
+                            void updateAiApiKey({ key: e.target.value });
+                          }}
+                        />
                       )}
 
                       {connectionTab === 1 && (

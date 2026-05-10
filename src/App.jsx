@@ -18,6 +18,7 @@ import CalendarPage from './pages/CalendarPage.jsx';
 import NotesPage from './pages/NotesPage.jsx';
 import SettingsPage from './pages/SettingsPage.jsx';
 import { preloadNativeModel, releaseNativeModel } from './ai/client.js';
+import { getTierLabel } from './ai/nativeModels.js';
 import { useColorMode } from './context/ThemeContext.jsx';
 import { useSettings } from './context/SettingsContext.jsx';
 
@@ -36,6 +37,10 @@ export default function App() {
   const location = useLocation();
   const { darkMode, toggleDarkMode } = useColorMode();
   const { aiConnection, isNativeMode } = useSettings();
+  const [nativeModelStatus, setNativeModelStatus] = useState({
+    phase: 'idle',
+    tier: '',
+  });
   const [nativeBanner, setNativeBanner] = useState({
     open: false,
     message: '',
@@ -46,11 +51,20 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
 
-    if (!isNativeMode || location.pathname !== '/') {
+    if (!isNativeMode) {
+      setNativeModelStatus({ phase: 'idle', tier: '' });
       return () => {
         cancelled = true;
       };
     }
+
+    if (location.pathname !== '/') {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setNativeModelStatus((prev) => ({ phase: 'loading', tier: prev.tier || '' }));
 
     const connection = {
       type: 'native',
@@ -59,25 +73,26 @@ export default function App() {
     void preloadNativeModel(connection)
       .then((result) => {
         if (cancelled || !result?.model) return;
+        const selectedTier = typeof result?.selectedTier === 'string' ? result.selectedTier : '';
+        setNativeModelStatus({ phase: 'ready', tier: selectedTier });
         if (lastReadyModelRef.current === result.model) return;
 
         lastReadyModelRef.current = result.model;
+        const tierLabel = getTierLabel(selectedTier);
         setNativeBanner({
           open: true,
           message: result.fallbackUsed
-            ? `Native model ready with fallback: ${result.model}`
-            : `Native model ready: ${result.model}`,
+            ? 'Native profile ready (fallback active).'
+            : `Native profile ready: ${tierLabel}`,
           severity: result.fallbackUsed ? 'warning' : 'success',
         });
       })
-      .catch((err) => {
+      .catch((_err) => {
         if (cancelled) return;
-        const message = err instanceof Error && err.message
-          ? err.message
-          : 'Failed to load native model.';
+        setNativeModelStatus((prev) => ({ phase: 'error', tier: prev.tier || '' }));
         setNativeBanner({
           open: true,
-          message,
+          message: 'Failed to prepare native profile. Try a lighter profile in Settings.',
           severity: 'error',
         });
       });
@@ -97,6 +112,7 @@ export default function App() {
       .then(() => {
         if (cancelled) return;
         lastReadyModelRef.current = '';
+        setNativeModelStatus({ phase: 'idle', tier: '' });
       })
       .catch(() => {
         // Ignore release errors while switching provider mode.
@@ -218,7 +234,18 @@ export default function App() {
       {/* Main content */}
       <Box component="main" sx={{ flexGrow: 1, overflow: 'auto', bgcolor: 'background.default' }}>
         <Routes>
-          <Route path="/" element={<CalendarPage />} />
+          <Route
+            path="/"
+            element={
+              <CalendarPage
+                nativeChatStatus={{
+                  enabled: isNativeMode,
+                  phase: nativeModelStatus.phase,
+                  tier: nativeModelStatus.tier,
+                }}
+              />
+            }
+          />
           <Route path="/notes" element={<NotesPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>

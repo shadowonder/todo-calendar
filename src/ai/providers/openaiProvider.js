@@ -4,6 +4,13 @@ import { buildThinkingPreview, sanitizeAssistantText } from '../outputSanitizer.
 const DEFAULT_OPENAI_MODEL = 'gpt-4.1-mini';
 const clientCache = new Map();
 
+function resolveRequestedModel(connection) {
+  const modelVersion = typeof connection?.modelVersion === 'string'
+    ? connection.modelVersion.trim()
+    : '';
+  return modelVersion || DEFAULT_OPENAI_MODEL;
+}
+
 function normalizeBaseURL(modelUrl) {
   const raw = typeof modelUrl === 'string' ? modelUrl.trim() : '';
   if (!raw) return undefined;
@@ -75,6 +82,12 @@ function emitStreamUpdate(onStream, rawText, model, done = false) {
   });
 }
 
+function getElectronOpenAIBridge() {
+  const db = globalThis?.window?.db || globalThis?.db;
+  const fn = db?.ai?.chatOpenAI;
+  return typeof fn === 'function' ? fn : null;
+}
+
 function getClient({ apiKey, baseURL }) {
   const key = `${baseURL || 'default'}::${apiKey}`;
   if (clientCache.has(key)) return clientCache.get(key);
@@ -95,6 +108,31 @@ export async function askWithOpenAI({ connection, messages, systemPrompt, signal
   }
 
   const baseURL = normalizeBaseURL(connection?.modelUrl);
+  const requestedModel = resolveRequestedModel(connection);
+  const electronOpenAI = getElectronOpenAIBridge();
+
+  if (electronOpenAI) {
+    const response = await electronOpenAI({
+      apiKey,
+      modelUrl: baseURL || '',
+      model: requestedModel,
+      messages: toOpenAIMessages(messages, systemPrompt),
+    });
+    const rawText = extractText(response?.text);
+    const text = sanitizeAssistantText(rawText);
+    if (!text) throw new Error('OpenAI returned an empty response after sanitization.');
+    if (typeof onStream === 'function') {
+      emitStreamUpdate(onStream, rawText, response?.model || requestedModel, false);
+      emitStreamUpdate(onStream, rawText, response?.model || requestedModel, true);
+    }
+    return {
+      text,
+      provider: 'openai',
+      meta: { model: response?.model || requestedModel },
+      thinkingPreview: buildThinkingPreview(rawText),
+    };
+  }
+
   const client = getClient({ apiKey, baseURL });
 
   const useStreaming = typeof onStream === 'function';
@@ -102,7 +140,7 @@ export async function askWithOpenAI({ connection, messages, systemPrompt, signal
   if (useStreaming) {
     const stream = await client.chat.completions.create(
       {
-        model: DEFAULT_OPENAI_MODEL,
+        model: requestedModel,
         temperature: 0.3,
         messages: toOpenAIMessages(messages, systemPrompt),
         stream: true,
@@ -111,7 +149,7 @@ export async function askWithOpenAI({ connection, messages, systemPrompt, signal
     );
 
     let rawText = '';
-    let streamModel = DEFAULT_OPENAI_MODEL;
+    let streamModel = requestedModel;
     for await (const chunk of stream) {
       if (typeof chunk?.model === 'string' && chunk.model.trim()) {
         streamModel = chunk.model;
@@ -135,7 +173,7 @@ export async function askWithOpenAI({ connection, messages, systemPrompt, signal
 
   const completion = await client.chat.completions.create(
     {
-      model: DEFAULT_OPENAI_MODEL,
+      model: requestedModel,
       temperature: 0.3,
       messages: toOpenAIMessages(messages, systemPrompt),
     },
@@ -150,7 +188,7 @@ export async function askWithOpenAI({ connection, messages, systemPrompt, signal
     text,
     provider: 'openai',
     meta: {
-      model: completion?.model || DEFAULT_OPENAI_MODEL,
+      model: completion?.model || requestedModel,
     },
     thinkingPreview: buildThinkingPreview(rawContent),
   };

@@ -43,14 +43,14 @@ const MODES = [
   { value: 'date_range', label: 'Date Range', desc: 'Visible across a range of dates' },
 ];
 
-// Map UI mode → DB task_type
+// Map UI mode to DB task_type
 function modeToTaskType(mode, hasDueDate) {
   if (mode === 'carry_over') return hasDueDate ? 'due_date' : 'regular';
   if (mode === 'fixed_day') return 'one_day';
   return 'future';
 }
 
-// Map DB task_type → UI mode
+// Map DB task_type to UI mode
 function taskTypeToMode(task_type) {
   if (task_type === 'one_day') return 'fixed_day';
   if (task_type === 'future') return 'date_range';

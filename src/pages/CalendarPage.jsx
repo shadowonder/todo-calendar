@@ -25,7 +25,7 @@ function truncateTitle(title, maxLength = 18) {
   return `${title.slice(0, maxLength)}...`;
 }
 
-export default function CalendarPage() {
+export default function CalendarPage({ nativeChatStatus = { enabled: false, phase: 'idle', tier: '' } }) {
   const today = new Date();
   const theme = useTheme();
 
@@ -124,19 +124,23 @@ export default function CalendarPage() {
 
   return (
     <Box sx={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
-      <TaskPanel selectedDate={selectedDate} onMutate={loadGridTasks} />
+      <TaskPanel
+        selectedDate={selectedDate}
+        onMutate={loadGridTasks}
+        nativeChatStatus={nativeChatStatus}
+      />
 
       <Box sx={{ flexGrow: 1, p: 3, overflow: 'auto' }}>
         {/* Navigation — only changes view month, never selectedDate */}
         <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, gap: 2 }}>
           <Button variant="outlined" size="small" onClick={() => setCurrent(new Date(year, month - 1, 1))}>
-            ‹
+            {"<"}
           </Button>
           <Typography variant="h6" fontWeight={700} sx={{ minWidth: 180, textAlign: 'center' }}>
             {MONTHS[month]} {year}
           </Typography>
           <Button variant="outlined" size="small" onClick={() => setCurrent(new Date(year, month + 1, 1))}>
-            ›
+            {">"}
           </Button>
           <Button variant="outlined" size="small" onClick={goToToday}>
             Today

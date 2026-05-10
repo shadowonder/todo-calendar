@@ -14,12 +14,12 @@ const DEFAULT_AI_CONNECTION = {
   type: 'native',
   lastNonNativeType: 'apikey',
   modelUrl: '',
+  modelVersion: '',
   native: {
     memoryQuota: '',
     modelTier: 'auto',
   },
   apiKey: {
-    url: '',
     key: '',
   },
   oauth: {
@@ -42,7 +42,7 @@ function normalizeAiConnection(raw) {
     if (NON_NATIVE_TYPES.has(type)) return type;
     if (typeof v?.oauth?.url === 'string' && v.oauth.url.trim()) return 'oauth';
     if (typeof v?.rest?.url === 'string' && v.rest.url.trim()) return 'restapi';
-    if (typeof v?.apiKey?.url === 'string' && v.apiKey.url.trim()) return 'apikey';
+    if (typeof v?.apiKey?.key === 'string' && v.apiKey.key.trim()) return 'apikey';
     return DEFAULT_AI_CONNECTION.lastNonNativeType;
   })();
   const restMethod = String(v?.rest?.method || '').toUpperCase() === 'GET' ? 'GET' : 'POST';
@@ -51,6 +51,7 @@ function normalizeAiConnection(raw) {
     type,
     lastNonNativeType: inferredNonNativeType,
     modelUrl: typeof v.modelUrl === 'string' ? v.modelUrl : DEFAULT_AI_CONNECTION.modelUrl,
+    modelVersion: typeof v.modelVersion === 'string' ? v.modelVersion : DEFAULT_AI_CONNECTION.modelVersion,
     native: {
       memoryQuota:
         v?.native?.memoryQuota === null || v?.native?.memoryQuota === undefined
@@ -61,7 +62,6 @@ function normalizeAiConnection(raw) {
         : DEFAULT_AI_CONNECTION.native.modelTier,
     },
     apiKey: {
-      url: typeof v?.apiKey?.url === 'string' ? v.apiKey.url : DEFAULT_AI_CONNECTION.apiKey.url,
       key: typeof v?.apiKey?.key === 'string' ? v.apiKey.key : DEFAULT_AI_CONNECTION.apiKey.key,
     },
     oauth: {
@@ -85,6 +85,7 @@ const SettingsContext = createContext({
   effectiveAiConnection: {
     type: 'native',
     modelUrl: '',
+    modelVersion: '',
     auth: null,
   },
   setSetting: async () => {},
@@ -92,6 +93,7 @@ const SettingsContext = createContext({
   setAiConnectionType: async () => {},
   setNativeMode: async () => {},
   setAiModelUrl: async () => {},
+  setAiModelVersion: async () => {},
   updateAiNative: async () => {},
   updateAiApiKey: async () => {},
   updateAiOauth: async () => {},
@@ -118,6 +120,7 @@ export function SettingsProvider({ children }) {
       return {
         type: 'native',
         modelUrl: '',
+        modelVersion: '',
         auth: { ...aiConnection.native },
       };
     }
@@ -125,6 +128,7 @@ export function SettingsProvider({ children }) {
       return {
         type: 'oauth',
         modelUrl: aiConnection.modelUrl,
+        modelVersion: aiConnection.modelVersion,
         auth: { ...aiConnection.oauth },
       };
     }
@@ -132,12 +136,14 @@ export function SettingsProvider({ children }) {
       return {
         type: 'restapi',
         modelUrl: aiConnection.modelUrl,
+        modelVersion: aiConnection.modelVersion,
         auth: { ...aiConnection.rest },
       };
     }
     return {
       type: 'apikey',
       modelUrl: aiConnection.modelUrl,
+      modelVersion: aiConnection.modelVersion,
       auth: { ...aiConnection.apiKey },
     };
   })();
@@ -211,6 +217,10 @@ export function SettingsProvider({ children }) {
     await setAiConnection((prev) => ({ ...prev, modelUrl: String(modelUrl ?? '') }));
   };
 
+  const setAiModelVersion = async (modelVersion) => {
+    await setAiConnection((prev) => ({ ...prev, modelVersion: String(modelVersion ?? '') }));
+  };
+
   const updateAiNative = async (patch = {}) => {
     await setAiConnection((prev) => ({
       ...prev,
@@ -252,6 +262,7 @@ export function SettingsProvider({ children }) {
         setAiConnectionType,
         setNativeMode,
         setAiModelUrl,
+        setAiModelVersion,
         updateAiNative,
         updateAiApiKey,
         updateAiOauth,
