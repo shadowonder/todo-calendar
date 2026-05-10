@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Box,
   Typography,
@@ -24,6 +24,12 @@ import {
 } from '@mui/icons-material';
 import { useColorMode } from '../context/ThemeContext.jsx';
 import { useSettings } from '../context/SettingsContext.jsx';
+import {
+  NATIVE_MODEL_TIERS,
+  getNativeRuntimeHints,
+  resolveNativeModelSelection,
+  getTierLabel,
+} from '../ai/nativeModels.js';
 
 export default function SettingsPage() {
   const { darkMode, toggleDarkMode } = useColorMode();
@@ -36,6 +42,7 @@ export default function SettingsPage() {
     setNativeMode,
     setAiModelUrl,
     setAiConnectionType,
+    updateAiNative,
     updateAiApiKey,
     updateAiOauth,
     updateAiRest,
@@ -49,6 +56,16 @@ export default function SettingsPage() {
   const tabToType = ['apikey', 'oauth', 'restapi'];
   const typeToTab = { apikey: 0, oauth: 1, restapi: 2 };
   const connectionTab = typeToTab[activeExternalType] ?? 0;
+  const nativeHints = useMemo(() => getNativeRuntimeHints(), []);
+  const nativeSelection = useMemo(
+    () => resolveNativeModelSelection(aiConnection.native, nativeHints),
+    [aiConnection.native, nativeHints]
+  );
+  const nativeTierLabel = getTierLabel(nativeSelection.selectedTier);
+  const nativeStrategyValue = (() => {
+    const tier = typeof aiConnection.native.modelTier === 'string' ? aiConnection.native.modelTier : 'auto';
+    return tier === 'auto' || NATIVE_MODEL_TIERS.some((item) => item.id === tier) ? tier : 'auto';
+  })();
 
   return (
     <Box sx={{ p: 3, maxWidth: 600 }}>
@@ -155,142 +172,181 @@ export default function SettingsPage() {
                 />
               </Box>
 
-              <TextField
-                fullWidth
-                size="small"
-                disabled={isNativeMode}
-                label="Model URL"
-                placeholder="https://api.example.com/v1/responses"
-                value={aiConnection.modelUrl}
-                onChange={(e) => {
-                  void setAiModelUrl(e.target.value);
-                }}
-                sx={{ mt: 1.2 }}
-              />
-
               {isNativeMode && (
-                <Typography variant="body2" color="text.secondary" sx={{ mt: 1.1 }}>
-                  Use native runtime connection. External model URL and authentication method are currently ignored.
-                </Typography>
+                <Box
+                  sx={{
+                    mt: 1.25,
+                    p: 1.25,
+                    border: 1,
+                    borderColor: 'divider',
+                    borderRadius: 1.5,
+                    bgcolor: 'background.paper',
+                  }}
+                >
+                  <Typography variant="body2" fontWeight={700}>
+                    Native Model Strategy
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    Device memory: {nativeHints.deviceMemoryGB ? `~${nativeHints.deviceMemoryGB} GB` : 'unknown'}
+                    {'  '}| CPU threads: {nativeHints.hardwareConcurrency || 'unknown'}
+                  </Typography>
+
+                  <FormControl size="small" fullWidth sx={{ mt: 1.2 }}>
+                    <Select
+                      value={nativeStrategyValue}
+                      onChange={(e) => {
+                        void updateAiNative({ modelTier: e.target.value });
+                      }}
+                    >
+                      <MenuItem value="auto">Auto (Recommended)</MenuItem>
+                      {NATIVE_MODEL_TIERS.map((tier) => (
+                        <MenuItem key={tier.id} value={tier.id}>
+                          {tier.label}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+
+                  <Typography variant="caption" color="text.secondary" sx={{ mt: 1.1, display: 'block' }}>
+                    {`Current strategy: ${nativeTierLabel}`}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ mt: 0.35, display: 'block' }}>
+                    {'Note: if the selected model fails to load or memory is insufficient, we will automatically switch to a lower-memory model.'}
+                  </Typography>
+                </Box>
               )}
 
               {!isNativeMode && (
-                <Box sx={{ mt: 1.5, border: 1, borderColor: 'divider', borderRadius: 1.5, overflow: 'hidden' }}>
-                  <Tabs
-                    value={connectionTab}
-                    onChange={(_, v) => {
-                      const nextType = tabToType[v] || 'apikey';
-                      void setAiConnectionType(nextType);
+                <>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    label="Model URL"
+                    placeholder="https://api.example.com/v1/responses"
+                    value={aiConnection.modelUrl}
+                    onChange={(e) => {
+                      void setAiModelUrl(e.target.value);
                     }}
-                    variant="fullWidth"
-                    sx={{ borderBottom: 1, borderColor: 'divider' }}
-                  >
-                    <Tab label="API Key" />
-                    <Tab label="OAuth" />
-                    <Tab label="REST API" />
-                  </Tabs>
+                    sx={{ mt: 1.2 }}
+                  />
 
-                  <Box sx={{ p: 1.5, display: 'grid', gap: 1.2 }}>
-                    {connectionTab === 0 && (
-                      <>
-                        <TextField
-                          fullWidth
-                          size="small"
-                          label="Auth URL"
-                          placeholder="https://auth.example.com/apikey"
-                          value={aiConnection.apiKey.url}
-                          onChange={(e) => {
-                            void updateAiApiKey({ url: e.target.value });
-                          }}
-                        />
-                        <TextField
-                          fullWidth
-                          size="small"
-                          type="password"
-                          label="API Key"
-                          placeholder="sk-..."
-                          value={aiConnection.apiKey.key}
-                          onChange={(e) => {
-                            void updateAiApiKey({ key: e.target.value });
-                          }}
-                        />
-                      </>
-                    )}
+                  <Box sx={{ mt: 1.5, border: 1, borderColor: 'divider', borderRadius: 1.5, overflow: 'hidden' }}>
+                    <Tabs
+                      value={connectionTab}
+                      onChange={(_, v) => {
+                        const nextType = tabToType[v] || 'apikey';
+                        void setAiConnectionType(nextType);
+                      }}
+                      variant="fullWidth"
+                      sx={{ borderBottom: 1, borderColor: 'divider' }}
+                    >
+                      <Tab label="API Key" />
+                      <Tab label="OAuth" />
+                      <Tab label="REST API" />
+                    </Tabs>
 
-                    {connectionTab === 1 && (
-                      <>
-                        <TextField
-                          fullWidth
-                          size="small"
-                          label="Auth URL"
-                          placeholder="https://auth.example.com/oauth/token"
-                          value={aiConnection.oauth.url}
-                          onChange={(e) => {
-                            void updateAiOauth({ url: e.target.value });
-                          }}
-                        />
-                        <TextField
-                          fullWidth
-                          size="small"
-                          label="Client ID"
-                          value={aiConnection.oauth.clientId}
-                          onChange={(e) => {
-                            void updateAiOauth({ clientId: e.target.value });
-                          }}
-                        />
-                        <TextField
-                          fullWidth
-                          size="small"
-                          type="password"
-                          label="Client Secret"
-                          value={aiConnection.oauth.clientSecret}
-                          onChange={(e) => {
-                            void updateAiOauth({ clientSecret: e.target.value });
-                          }}
-                        />
-                      </>
-                    )}
-
-                    {connectionTab === 2 && (
-                      <>
-                        <TextField
-                          fullWidth
-                          size="small"
-                          label="Auth URL"
-                          placeholder="https://auth.example.com/token"
-                          value={aiConnection.rest.url}
-                          onChange={(e) => {
-                            void updateAiRest({ url: e.target.value });
-                          }}
-                        />
-                        <FormControl size="small" sx={{ width: 140 }}>
-                          <Select
-                            value={aiConnection.rest.method}
+                    <Box sx={{ p: 1.5, display: 'grid', gap: 1.2 }}>
+                      {connectionTab === 0 && (
+                        <>
+                          <TextField
+                            fullWidth
+                            size="small"
+                            label="Auth URL"
+                            placeholder="https://auth.example.com/apikey"
+                            value={aiConnection.apiKey.url}
                             onChange={(e) => {
-                              void updateAiRest({ method: e.target.value });
+                              void updateAiApiKey({ url: e.target.value });
                             }}
-                          >
-                            <MenuItem value="GET">GET</MenuItem>
-                            <MenuItem value="POST">POST</MenuItem>
-                          </Select>
-                        </FormControl>
-                        <TextField
-                          fullWidth
-                          size="small"
-                          label="Body"
-                          multiline
-                          minRows={5}
-                          placeholder={`{\n  "client_id": "...",\n  "client_secret": "..."\n}`}
-                          value={aiConnection.rest.requestBody}
-                          onChange={(e) => {
-                            void updateAiRest({ requestBody: e.target.value });
-                          }}
-                          sx={{ '& .MuiInputBase-input': { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' } }}
-                        />
-                      </>
-                    )}
+                          />
+                          <TextField
+                            fullWidth
+                            size="small"
+                            type="password"
+                            label="API Key"
+                            placeholder="sk-..."
+                            value={aiConnection.apiKey.key}
+                            onChange={(e) => {
+                              void updateAiApiKey({ key: e.target.value });
+                            }}
+                          />
+                        </>
+                      )}
+
+                      {connectionTab === 1 && (
+                        <>
+                          <TextField
+                            fullWidth
+                            size="small"
+                            label="Auth URL"
+                            placeholder="https://auth.example.com/oauth/token"
+                            value={aiConnection.oauth.url}
+                            onChange={(e) => {
+                              void updateAiOauth({ url: e.target.value });
+                            }}
+                          />
+                          <TextField
+                            fullWidth
+                            size="small"
+                            label="Client ID"
+                            value={aiConnection.oauth.clientId}
+                            onChange={(e) => {
+                              void updateAiOauth({ clientId: e.target.value });
+                            }}
+                          />
+                          <TextField
+                            fullWidth
+                            size="small"
+                            type="password"
+                            label="Client Secret"
+                            value={aiConnection.oauth.clientSecret}
+                            onChange={(e) => {
+                              void updateAiOauth({ clientSecret: e.target.value });
+                            }}
+                          />
+                        </>
+                      )}
+
+                      {connectionTab === 2 && (
+                        <>
+                          <TextField
+                            fullWidth
+                            size="small"
+                            label="Auth URL"
+                            placeholder="https://auth.example.com/token"
+                            value={aiConnection.rest.url}
+                            onChange={(e) => {
+                              void updateAiRest({ url: e.target.value });
+                            }}
+                          />
+                          <FormControl size="small" sx={{ width: 140 }}>
+                            <Select
+                              value={aiConnection.rest.method}
+                              onChange={(e) => {
+                                void updateAiRest({ method: e.target.value });
+                              }}
+                            >
+                              <MenuItem value="GET">GET</MenuItem>
+                              <MenuItem value="POST">POST</MenuItem>
+                            </Select>
+                          </FormControl>
+                          <TextField
+                            fullWidth
+                            size="small"
+                            label="Body"
+                            multiline
+                            minRows={5}
+                            placeholder={`{\n  "client_id": "...",\n  "client_secret": "..."\n}`}
+                            value={aiConnection.rest.requestBody}
+                            onChange={(e) => {
+                              void updateAiRest({ requestBody: e.target.value });
+                            }}
+                            sx={{ '& .MuiInputBase-input': { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' } }}
+                          />
+                        </>
+                      )}
+                    </Box>
                   </Box>
-                </Box>
+                </>
               )}
 
               <Box sx={{ mt: 1.5 }}>

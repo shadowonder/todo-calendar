@@ -1,0 +1,42 @@
+{
+  "autoPolicy": {
+    "defaultTier": "balanced",
+    "deviceMemoryGB": [
+      { "min": 8, "tier": "high" },
+      { "min": 4, "tier": "balanced" },
+      { "min": 2, "tier": "light" },
+      { "min": 0, "tier": "tiny" }
+    ],
+    "hardwareConcurrency": [
+      { "min": 12, "tier": "balanced" },
+      { "min": 6, "tier": "light" },
+      { "min": 0, "tier": "tiny" }
+    ]
+  },
+  "tiers": [
+    {
+      "id": "high",
+      "label": "High Quality (5-8 GB)",
+      "modelId": "Llama-3.1-8B-Instruct-q4f16_1-MLC",
+      "approxVramMB": 5001
+    },
+    {
+      "id": "balanced",
+      "label": "Balanced (3-5 GB)",
+      "modelId": "Phi-4-mini-instruct-q4f16_1-MLC",
+      "approxVramMB": 3437.58
+    },
+    {
+      "id": "light",
+      "label": "Lightweight (1-3 GB)",
+      "modelId": "Qwen2.5-1.5B-Instruct-q4f16_1-MLC",
+      "approxVramMB": 1629.75
+    },
+    {
+      "id": "tiny",
+      "label": "Low Memory (0.5-1 GB)",
+      "modelId": "SmolLM2-360M-Instruct-q4f32_1-MLC",
+      "approxVramMB": 579.61
+    }
+  ]
+}

@@ -25,6 +25,7 @@ import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from 
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useTasks } from '../hooks/useTasks.js';
+import { useAiChat } from '../hooks/useAiChat.js';
 import AddTaskDialog from './AddTodoDialog.jsx';
 import { useSettings } from '../context/SettingsContext.jsx';
 import { resolveTaskColor } from '../constants/taskColors.js';
@@ -128,10 +129,7 @@ export default function TaskPanel({ selectedDate, onMutate }) {
   const [colorPopover, setColorPopover] = useState({ anchorEl: null, taskId: null });
   const [activeTab, setActiveTab] = useState(0); // 0=Chat, 1=Tasks
   const [chatInput, setChatInput] = useState('');
-  const [chatSending, setChatSending] = useState(false);
-  const [chatMessages, setChatMessages] = useState([
-    { id: 1, role: 'assistant', text: 'Hello, This is a sample AI assistant, which will answer your question right here.' },
-  ]);
+  const { chatMessages, chatSending, providerLabel, sendMessage } = useAiChat({ selectedDate, tasks });
   const chatBottomRef = useRef(null);
 
   useEffect(() => {
@@ -141,21 +139,8 @@ export default function TaskPanel({ selectedDate, onMutate }) {
   const sendChat = async () => {
     const text = chatInput.trim();
     if (!text || chatSending) return;
-
-    const userMsg = { id: Date.now(), role: 'user', text };
-    setChatMessages((prev) => [...prev, userMsg]);
     setChatInput('');
-    setChatSending(true);
-
-    // Placeholder assistant response; we can wire this to a real model endpoint next.
-    const preview = text.length > 60 ? `${text.slice(0, 60)}...` : text;
-    const aiMsg = {
-      id: Date.now() + 1,
-      role: 'assistant',
-      text: `Received: ${preview}\nI can help with that.`,
-    };
-    setChatMessages((prev) => [...prev, aiMsg]);
-    setChatSending(false);
+    await sendMessage(text);
   };
 
   // ── Search ────────────────────────────────────────────────────────────────
@@ -274,7 +259,7 @@ export default function TaskPanel({ selectedDate, onMutate }) {
               AI Chat
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              Ask about task planning and execution.
+              Provider: {providerLabel}
             </Typography>
           </Box>
 

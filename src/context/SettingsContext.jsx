@@ -4,18 +4,19 @@
  * Provides settings values and a setter that persists to DB.
  */
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import { NATIVE_MODEL_TIER_OPTION_IDS } from '../ai/nativeModels.js';
 
 const isElectron = () => typeof window !== 'undefined' && !!window.db;
 
 const AI_TYPES = new Set(['native', 'apikey', 'oauth', 'restapi']);
 const NON_NATIVE_TYPES = new Set(['apikey', 'oauth', 'restapi']);
-
 const DEFAULT_AI_CONNECTION = {
   type: 'native',
   lastNonNativeType: 'apikey',
   modelUrl: '',
   native: {
     memoryQuota: '',
+    modelTier: 'auto',
   },
   apiKey: {
     url: '',
@@ -55,6 +56,9 @@ function normalizeAiConnection(raw) {
         v?.native?.memoryQuota === null || v?.native?.memoryQuota === undefined
           ? DEFAULT_AI_CONNECTION.native.memoryQuota
           : String(v.native.memoryQuota),
+      modelTier: NATIVE_MODEL_TIER_OPTION_IDS.has(v?.native?.modelTier)
+        ? v.native.modelTier
+        : DEFAULT_AI_CONNECTION.native.modelTier,
     },
     apiKey: {
       url: typeof v?.apiKey?.url === 'string' ? v.apiKey.url : DEFAULT_AI_CONNECTION.apiKey.url,
