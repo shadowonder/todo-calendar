@@ -3,7 +3,7 @@
  *
  * Responsibilities:
  * - define reusable prompt builders
- * - keep system prompt structure centralized and minimal
+ * - keep system prompt compact and structured
  *
  * Non-responsibilities:
  * - do not call model providers
@@ -13,42 +13,65 @@
 import {
   buildActionJsonContract,
   buildProcessorInstructionTable,
+  buildProcessorPromptNotes,
 } from '../actions/actionCatalog.js';
 
-const MAX_CONTEXT_TASKS = 12;
+const MAX_CONTEXT_TASKS = 10;
+const MAX_TEXT_LEN = 80;
 
 function trimText(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function formatDateLabel(value) {
-  const raw = trimText(value);
-  if (!raw) return 'Unknown Date';
-
-  const guess = raw.length === 10 ? `${raw}T00:00:00` : raw;
-  const date = new Date(guess);
-  if (Number.isNaN(date.getTime())) return raw;
-  return new Intl.DateTimeFormat('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: '2-digit',
-  }).format(date);
+function clipText(value, maxLen = MAX_TEXT_LEN) {
+  const text = trimText(value);
+  if (!text) return '';
+  if (text.length <= maxLen) return text;
+  return `${text.slice(0, maxLen - 3)}...`;
 }
 
-function summarizeTask(task, index) {
-  const dateLabel = formatDateLabel(task?.entry_date || task?.start_date || task?.origin_date);
-  const priorityLabel = task?.prioritized === 1 || task?.prioritized === true ? 'Prioritized' : 'Normal';
-  const title = trimText(task?.title) || `Task ${index + 1}`;
-  const description = trimText(task?.description) || '(empty)';
-  const status = task?.done === 1 || task?.entry_status === 'done' ? 'done' : 'pending';
-  const rolled = task?.entry_status === 'rolled' ? 'rolled' : null;
-  const flags = [status, rolled].filter(Boolean).join(', ');
-  return `${dateLabel} - ${priorityLabel} - ${title} - status: ${flags} - description: ${description}`;
+function pickTaskDate(task) {
+  return trimText(task?.entry_date)
+    || trimText(task?.start_date)
+    || trimText(task?.origin_date)
+    || '';
+}
+
+function normalizeBoolInt(value) {
+  return value === 1 || value === true ? 1 : 0;
+}
+
+function nullableDate(value) {
+  const text = trimText(value);
+  return text || null;
+}
+
+function toTaskRow(task, index) {
+  return {
+    id: typeof task?.id === 'number' ? task.id : null,
+    date: pickTaskDate(task),
+    title: clipText(task?.title) || `Task ${index + 1}`,
+    done: normalizeBoolInt(task?.done),
+    prioritized: normalizeBoolInt(task?.prioritized),
+    status: trimText(task?.entry_status) || (normalizeBoolInt(task?.done) ? 'done' : 'pending'),
+    type: trimText(task?.task_type) || 'regular',
+    start_date: nullableDate(task?.start_date),
+    due_date: nullableDate(task?.due_date),
+    end_date: nullableDate(task?.end_date),
+    description: clipText(task?.description),
+  };
 }
 
 function buildTaskContext(tasks) {
-  if (!Array.isArray(tasks) || tasks.length === 0) return 'No tasks in current view.';
-  return tasks.slice(0, MAX_CONTEXT_TASKS).map(summarizeTask).join('\n');
+  if (!Array.isArray(tasks) || tasks.length === 0) {
+    return ['VISIBLE_TASKS_JSONL', '[]'].join('\n');
+  }
+
+  const rows = tasks
+    .slice(0, MAX_CONTEXT_TASKS)
+    .map((task, index) => JSON.stringify(toTaskRow(task, index)));
+
+  return ['VISIBLE_TASKS_JSONL', ...rows].join('\n');
 }
 
 function buildRuntimeContext({
@@ -57,60 +80,84 @@ function buildRuntimeContext({
   timezone,
   tasks,
 } = {}) {
-  const dateText = trimText(selectedDate) || 'unknown date';
-  const nowText = trimText(currentTime) || new Date().toISOString();
-  const tzText = trimText(timezone) || 'UTC';
-  const taskContext = buildTaskContext(tasks);
+  const runtime = {
+    selectedDate: trimText(selectedDate) || 'unknown-date',
+    currentTime: trimText(currentTime) || new Date().toISOString(),
+    timezone: trimText(timezone) || 'UTC',
+  };
+
+  const visibleTaskSchema = {
+    id: 'number|null',
+    date: 'YYYY-MM-DD|""',
+    title: 'string',
+    done: '0|1',
+    prioritized: '0|1',
+    status: 'pending|done|rolled|overdue|string',
+    type: 'string',
+    start_date: 'YYYY-MM-DD|null',
+    due_date: 'YYYY-MM-DD|null',
+    end_date: 'YYYY-MM-DD|null',
+    description: 'string',
+  };
 
   return [
-    'RUNTIME_CONTEXT',
-    `selectedDate: ${dateText}`,
-    `currentTime: ${nowText}`,
-    `timezone: ${tzText}`,
-    'visibleTasks:',
-    taskContext,
+    `CTX=${JSON.stringify(runtime)}`,
+    `VISIBLE_TASK_SCHEMA=${JSON.stringify(visibleTaskSchema)}`,
+    buildTaskContext(tasks),
   ].join('\n');
 }
 
-function buildJsonOutputHardRules() {
+function buildMissionBlock({ stage } = {}) {
+  const stageFocus = stage === 'preflight'
+    ? '- Stage focus: choose route and define read plan when needed.'
+    : '- Stage focus: produce final structured output from enriched context.';
+
   return [
-    'OUTPUT_RULES',
-    '- Output exactly one JSON object. No markdown, no code fence, no extra prose.',
-    '- Top-level keys must be exactly: action, response, actions.',
-    '- action must be one of: noAction, read, write.',
-    '- actions items must include: reason, method, args.',
-    '- method must be a valid processor name and cannot be null.',
-    '- args must be an array of positional values only.',
-    '- Do not output key-value pair tuples like [["key","value"]].',
-    '- response must be plain text. Do not place a JSON string inside response.',
+    'MISSION',
+    '- You are the AI reasoning layer for the Todo Calendar module.',
+    '- Convert user intent into structured JSON for the current pipeline stage.',
+    '- Database execution and UI rendering are handled by the application, not by you.',
+    stageFocus,
   ].join('\n');
 }
 
-function buildLlmUserVisibleRules() {
+function buildJsonOutputHardRules({ allowRead = true } = {}) {
+  const actionEnum = allowRead ? 'noAction|read|write' : 'noAction|write';
   return [
-    'USER_VISIBLE_RESPONSE_RULES',
-    '- In llm.step, do not output action=read.',
-    '- If user request is informational and can be answered from visibleTasks/context, action must be noAction.',
-    '- Do not create follow-up tasks/reminders automatically.',
-    '- Use action=write only when user explicitly requests create/update/delete/complete operations.',
-    '- response is shown directly to end users.',
-    '- end users do not know JSON/schema/processors/pipeline.',
-    '- never mention JSON, schema, tool name, processor name, or internal step names in response.',
-    '- write action: response must be a clear confirmation question to users.',
-    '- noAction action: response must be a direct final answer.',
+    'HARD_RULES',
+    `- OUT={"action":"${actionEnum}","response":"string|null","actions":[{"reason":"string","method":"<method>","args":[...]}]}`,
+    '- Return exactly one JSON object.',
+    '- No markdown, no code fence, no prefix/suffix prose.',
+    '- Top-level keys must be exactly: action,response,actions.',
+    '- method must be in PROCESSOR_TABLE and cannot be null.',
+    '- args must be positional array values only.',
+    '- response must be plain text or null when allowed by contract.',
   ].join('\n');
 }
 
-function buildPreflightMachineRules() {
+function buildPreflightRules() {
   return [
     'PREFLIGHT_RULES',
-    '- Your JSON is consumed by system code for routing and data fetching.',
-    '- Prioritize stable machine-readable output over conversational style.',
-    '- For pure information requests (query/list/search/count/check), choose action=read.',
-    '- For create/update/delete/complete/archive requests, choose action=write.',
-    '- If no DB action is needed, use noAction.',
-    '- Never choose write just to ask clarification or provide options.',
-    '- For read/write actions, provide only valid methods with positional args.',
+    '- This stage decides route only: noAction, read, or write.',
+    '- If additional database information is needed, choose action=read and provide read actions only.',
+    '- For action=read, response should be null by default.',
+    '- If write intent exists and required args are complete, choose action=write.',
+    '- If required write args are missing or ambiguous, choose action=noAction with clarification response and actions=[].',
+    '- Never put write methods under action=read.',
+  ].join('\n');
+}
+
+function buildLlmRules() {
+  return [
+    'LLM_RULES',
+    '- action=read is not allowed in this stage.',
+    '- Use visibleTasks and runtime context as the source of truth for final output.',
+    '- If request is informational and answerable from context, choose action=noAction.',
+    '- Choose action=write only when user explicitly requests create/update/delete/complete and required args are complete.',
+    '- If required write args are missing or ambiguous, choose action=noAction with clarification response and actions=[].',
+    '- For action=write, response must be a declarative plain statement of planned changes.',
+    '- Do not ask for execution confirmation in write response.',
+    '- Do not mention internal pipeline/schema/tool terminology in user-facing response.',
   ].join('\n');
 }
 
@@ -119,20 +166,17 @@ function buildPreflightMachineRules() {
  * Kept as lightweight fallback for the old direct router path.
  */
 export function buildSystemPrompt({ selectedDate, tasks }) {
-  const dateText = trimText(selectedDate) || 'unknown date';
   return [
     'You are Todo Calendar Assistant.',
-    "Reply in the user's language.",
-    'Keep the answer concise and practical.',
-    `Selected date: ${dateText}`,
-    'Task context:',
+    'Reply in the user language. Keep concise and practical.',
+    `selectedDate=${trimText(selectedDate) || 'unknown-date'}`,
     buildTaskContext(tasks),
   ].join('\n');
 }
 
 /**
  * Structured-output system prompt for preflight.step.
- * This prompt is machine-oriented and optimized for stable routing JSON.
+ * Machine-oriented: route decision and optional read planning.
  */
 export function buildPreflightSystemPrompt({
   selectedDate,
@@ -142,32 +186,21 @@ export function buildPreflightSystemPrompt({
   allowRead = true,
 } = {}) {
   return [
-    'ROLE',
-    'You are Todo Calendar Preflight Planner.',
-    "Use user's language only in reason/response string values.",
-    '',
-    buildJsonOutputHardRules(),
-    '',
-    buildPreflightMachineRules(),
-    '',
-    'ACTION_CONTRACT',
+    'ROLE=TodoCalendarPreflightPlanner',
+    'LANG=Use user language only inside reason/response string values.',
+    buildMissionBlock({ stage: 'preflight' }),
+    buildJsonOutputHardRules({ allowRead }),
+    buildPreflightRules(),
     buildActionJsonContract({ allowRead }),
-    '',
-    'AVAILABLE_PROCESSORS',
     buildProcessorInstructionTable({ includeRead: allowRead, includeWrite: true }),
-    '',
-    buildRuntimeContext({
-      selectedDate,
-      currentTime,
-      timezone,
-      tasks,
-    }),
-  ].join('\n');
+    buildProcessorPromptNotes({ includeRead: allowRead, includeWrite: true }),
+    buildRuntimeContext({ selectedDate, currentTime, timezone, tasks }),
+  ].join('\n\n');
 }
 
 /**
- * Structured-output system prompt for llm.step final response generation.
- * This prompt is user-facing aware: response will be shown directly in UI.
+ * Structured-output system prompt for llm.step.
+ * User-facing: final structured response synthesis.
  */
 export function buildLlmSystemPrompt({
   selectedDate,
@@ -176,28 +209,20 @@ export function buildLlmSystemPrompt({
   timezone,
   allowRead = true,
 } = {}) {
+  void allowRead;
+  const llmAllowRead = false;
+
   return [
-    'ROLE',
-    'You are Todo Calendar Assistant.',
-    "Use user's language only in reason/response string values.",
-    '',
-    buildJsonOutputHardRules(),
-    '',
-    buildLlmUserVisibleRules(),
-    '',
-    'ACTION_CONTRACT',
-    buildActionJsonContract({ allowRead }),
-    '',
-    'AVAILABLE_PROCESSORS',
-    buildProcessorInstructionTable({ includeRead: allowRead, includeWrite: true }),
-    '',
-    buildRuntimeContext({
-      selectedDate,
-      currentTime,
-      timezone,
-      tasks,
-    }),
-  ].join('\n');
+    'ROLE=TodoCalendarAssistant',
+    'LANG=Use user language only inside reason/response string values.',
+    buildMissionBlock({ stage: 'llm' }),
+    buildJsonOutputHardRules({ allowRead: llmAllowRead }),
+    buildLlmRules(),
+    buildActionJsonContract({ allowRead: llmAllowRead }),
+    buildProcessorInstructionTable({ includeRead: llmAllowRead, includeWrite: true }),
+    buildProcessorPromptNotes({ includeRead: llmAllowRead, includeWrite: true }),
+    buildRuntimeContext({ selectedDate, currentTime, timezone, tasks }),
+  ].join('\n\n');
 }
 
 /**

@@ -1,9 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Box, Typography, Paper, Button, useTheme } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import TaskPanel from '../components/TaskPanel.jsx';
 import { getMemoryGridTasks } from '../hooks/useTasks.js';
 import { resolveTaskColor } from '../constants/taskColors.js';
+import { AiPreviewProvider, useAiPreview } from '../context/AiPreviewContext.jsx';
+import { derivePreviewTasksMap } from '../ai/preview/derivePreviewTasksMap.js';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -25,9 +27,52 @@ function truncateTitle(title, maxLength = 18) {
   return `${title.slice(0, maxLength)}...`;
 }
 
-export default function CalendarPage({ nativeChatStatus = { enabled: false, phase: 'idle', tier: '' } }) {
+function compareTaskIds(aId, bId) {
+  const aNum = Number(aId);
+  const bNum = Number(bId);
+  const aIsNum = Number.isFinite(aNum);
+  const bIsNum = Number.isFinite(bNum);
+  if (aIsNum && bIsNum) return aNum - bNum;
+  if (aIsNum) return -1;
+  if (bIsNum) return 1;
+  return String(aId ?? '').localeCompare(String(bId ?? ''));
+}
+
+function getPreviewVisualStyle(previewStatus, theme) {
+  if (previewStatus === 'created' || previewStatus === 'movedTo') {
+    return {
+      borderColor: theme.palette.success.main,
+      bgColor: alpha(theme.palette.success.main, 0.16),
+      textColor: theme.palette.success.dark,
+      forceLineThrough: false,
+      opacity: 1,
+    };
+  }
+  if (previewStatus === 'updated') {
+    return {
+      borderColor: theme.palette.warning.main,
+      bgColor: alpha(theme.palette.warning.main, 0.18),
+      textColor: theme.palette.warning.dark,
+      forceLineThrough: false,
+      opacity: 1,
+    };
+  }
+  if (previewStatus === 'deleted' || previewStatus === 'movedFrom') {
+    return {
+      borderColor: theme.palette.error.main,
+      bgColor: alpha(theme.palette.error.main, 0.14),
+      textColor: theme.palette.error.dark,
+      forceLineThrough: true,
+      opacity: 0.85,
+    };
+  }
+  return null;
+}
+
+function CalendarPageContent({ nativeChatStatus = { enabled: false, phase: 'idle', tier: '' } }) {
   const today = new Date();
   const theme = useTheme();
+  const { structuredPlan } = useAiPreview();
 
   // view month (independent from selected date)
   const [current, setCurrent] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
@@ -83,6 +128,11 @@ export default function CalendarPage({ nativeChatStatus = { enabled: false, phas
   useEffect(() => {
     loadGridTasks();
   }, [loadGridTasks]);
+
+  const previewTasksMap = useMemo(
+    () => derivePreviewTasksMap(gridTasksMap, structuredPlan, { devMode: import.meta.env.DEV }),
+    [gridTasksMap, structuredPlan]
+  );
 
   // ── Circle style / text colour helpers ───────────────────────────────────
   const getCircleStyle = (dateStr, overflow) => {
@@ -148,7 +198,7 @@ export default function CalendarPage({ nativeChatStatus = { enabled: false, phas
         </Box>
 
         <Paper elevation={0} sx={{ border: 1, borderColor: 'divider', borderRadius: 2, overflow: 'hidden' }}>
-          {/* Day headers */}
+          {/* Day headers (weekdays) */}
           <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', bgcolor: 'action.hover', borderBottom: 1, borderColor: 'divider' }}>
             {DAYS.map((d) => (
               <Box key={d} sx={{ py: 1, textAlign: 'center' }}>
@@ -163,7 +213,7 @@ export default function CalendarPage({ nativeChatStatus = { enabled: false, phas
           <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)' }}>
             {cells.map(({ dateStr, day, overflow }, i) => {
               const isSelected = dateStr === selectedDate;
-              const dayTasks = gridTasksMap[dateStr] ?? [];
+              const dayTasks = previewTasksMap[dateStr] ?? [];
               const sortedDayTasks = dayTasks.slice().sort((a, b) => {
                 const so = (a.sort_order ?? 0) - (b.sort_order ?? 0);
                 if (so !== 0) return so;
@@ -172,7 +222,7 @@ export default function CalendarPage({ nativeChatStatus = { enabled: false, phas
                 const bp = b.prioritized ?? 0;
                 if (ap !== bp) return bp - ap;
 
-                return (a.id ?? 0) - (b.id ?? 0);
+                return compareTaskIds(a.id, b.id);
               });
               return (
                 <Box
@@ -218,6 +268,11 @@ export default function CalendarPage({ nativeChatStatus = { enabled: false, phas
                       const isDone = task.done === 1 || task.entry_status === 'done';
                       const isOverdue = task.entry_status === 'overdue';
                       const isPinned = task.prioritized === 1;
+                      const previewStatus = typeof task.previewStatus === 'string'
+                        ? task.previewStatus
+                        : 'unchanged';
+                      const isPreviewModified = task.modified === true || previewStatus !== 'unchanged';
+                      const previewStyle = getPreviewVisualStyle(previewStatus, theme);
 
                       // Resolve colors: custom > status-based fallback
                       const customColor = task.color ? resolveTaskColor(task.color) : null;
@@ -240,9 +295,20 @@ export default function CalendarPage({ nativeChatStatus = { enabled: false, phas
                             ? '#B45309' // amber border for pinned-default
                             : resolvedColor.text;
 
+                      const finalPillBg = previewStyle
+                        ? previewStyle.bgColor
+                        : (pillBg ?? (isDone ? 'action.disabledBackground' : isOverdue ? 'error.light' : 'warning.light'));
+                      const finalPillBorder = previewStyle ? previewStyle.borderColor : pillBorder;
+                      const finalPillText = previewStyle
+                        ? previewStyle.textColor
+                        : (pillText ?? (isDone ? 'text.disabled' : isOverdue ? 'error.contrastText' : 'warning.dark'));
+                      const forceLineThrough = Boolean(previewStyle?.forceLineThrough);
+                      const finalOpacity = previewStyle?.opacity ?? 1;
+                      const previewKey = task.previewKey || `${String(task.id ?? 'task')}:${String(task.entry_date ?? dateStr)}`;
+
                       return (
                         <Box
-                          key={task.id}
+                          key={previewKey}
                           sx={{
                             px: 0.6,
                             py: 0.1,
@@ -250,8 +316,10 @@ export default function CalendarPage({ nativeChatStatus = { enabled: false, phas
                             minWidth: 0,
                             overflow: 'hidden',
                             border: '1px solid',
-                            borderColor: pillBorder,
-                            bgcolor: pillBg ?? (isDone ? 'action.disabledBackground' : isOverdue ? 'error.light' : 'warning.light'),
+                            borderColor: finalPillBorder,
+                            borderStyle: isPreviewModified ? 'dashed' : 'solid',
+                            bgcolor: finalPillBg,
+                            opacity: finalOpacity,
                           }}
                         >
                           <Typography
@@ -265,8 +333,8 @@ export default function CalendarPage({ nativeChatStatus = { enabled: false, phas
                               whiteSpace: 'nowrap',
                               overflow: 'hidden',
                               textOverflow: 'ellipsis',
-                              textDecoration: isDone ? 'line-through' : 'none',
-                              color: pillText ?? (isDone ? 'text.disabled' : isOverdue ? 'error.contrastText' : 'warning.dark'),
+                              textDecoration: isDone || forceLineThrough ? 'line-through' : 'none',
+                              color: finalPillText,
                             }}
                           >
                             {truncateTitle(task.title)}
@@ -287,5 +355,13 @@ export default function CalendarPage({ nativeChatStatus = { enabled: false, phas
         </Paper>
       </Box>
     </Box>
+  );
+}
+
+export default function CalendarPage(props) {
+  return (
+    <AiPreviewProvider>
+      <CalendarPageContent {...props} />
+    </AiPreviewProvider>
   );
 }

@@ -42,10 +42,36 @@ const NULLABLE_DATE_DAY_ARG = z
   .nullable()
   .describe(`${DATE_DAY_RULE}|null`);
 
+/**
+ * Generic "meaningful value" detector used by write no-op checks.
+ * Purpose:
+ * - distinguish empty placeholders (null/''/empty object) from real updates.
+ */
+function hasMeaningfulValue(value) {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value === 'boolean') return true;
+  if (Array.isArray(value)) return value.some((item) => hasMeaningfulValue(item));
+  if (typeof value === 'object') return Object.values(value).some((item) => hasMeaningfulValue(item));
+  return true;
+}
+
+/**
+ * Read tuple item definitions from a zod tuple schema.
+ * Used to render prompt-facing arg rules from one source of truth.
+ */
 function getTupleItems(argsSchema) {
   return Array.isArray(argsSchema?.def?.items) ? argsSchema.def.items : [];
 }
 
+/**
+ * Convert one zod schema node into a compact rule token for prompt tables.
+ * Example output:
+ * - string
+ * - integer|null
+ * - /^\\d{4}-\\d{2}-\\d{2}$/
+ */
 function getZodRuleToken(schema) {
   const description = typeof schema?.description === 'string' ? schema.description.trim() : '';
   if (description) return description;
@@ -68,6 +94,10 @@ function getZodRuleToken(schema) {
   return 'unknown';
 }
 
+/**
+ * Convert a method's args tuple into an ordered token list.
+ * This preserves positional semantics for model output.
+ */
 function getArgRuleTokens(argsSchema) {
   return getTupleItems(argsSchema).map((item) => getZodRuleToken(item));
 }
@@ -150,7 +180,15 @@ export const WRITE_PROCESSORS = {
       NULLABLE_STRING_ARG,
     ]),
     effect:
-      'Create a task. Args: originDate, title, description, tags, taskType, startDate, endDate, dueDate, prioritized, color.',
+      'Create a task. Args: originDate, title, description, tags, taskType, startDate, endDate, dueDate, prioritized, color. If a concrete target day is known, set originDate and startDate to that day; do not keep startDate null while only filling dueDate.',
+    // No-op definition for atomic write safety.
+    // If title/date signal is missing, this write action should be downgraded.
+    isNoOpArgs: (args) => {
+      if (!Array.isArray(args) || args.length < 2) return true;
+      const title = typeof args[1] === 'string' ? args[1].trim() : '';
+      const hasAnyDate = [args[0], args[5], args[6], args[7]].some((item) => hasMeaningfulValue(item));
+      return !title || !hasAnyDate;
+    },
     processor: async ({ api, args }) => {
       const originDate = args[0];
       return api.create({
@@ -172,6 +210,14 @@ export const WRITE_PROCESSORS = {
     params: ['taskId', 'patch'],
     argsSchema: z.tuple([INTEGER_ARG, OBJECT_ARG]),
     effect: 'Update task by id with a patch object.',
+    // No-op definition for atomic write safety.
+    // Empty patch (or patch with only empty values) means "update nothing".
+    isNoOpArgs: (args) => {
+      if (!Array.isArray(args) || args.length < 2) return true;
+      const patch = args[1];
+      if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return true;
+      return !Object.values(patch).some((item) => hasMeaningfulValue(item));
+    },
     processor: async ({ api, args }) => api.update(args[0], args[1]),
   },
 
@@ -179,6 +225,9 @@ export const WRITE_PROCESSORS = {
     params: ['taskId', 'done', 'entryDate'],
     argsSchema: z.tuple([INTEGER_ARG, BOOLEAN_ARG, DATE_DAY_ARG]),
     effect: 'Set done/pending status for one task on one date entry.',
+    // No-op definition for atomic write safety.
+    // Missing entryDate or missing args means this action is not executable.
+    isNoOpArgs: (args) => !Array.isArray(args) || args.length < 3,
     processor: async ({ api, args }) => api.setDone(args[0], args[1], args[2]),
   },
 
@@ -186,6 +235,9 @@ export const WRITE_PROCESSORS = {
     params: ['taskId'],
     argsSchema: z.tuple([INTEGER_ARG]),
     effect: 'Soft-delete one task by id.',
+    // No-op definition for atomic write safety.
+    // Missing taskId means this action should not execute.
+    isNoOpArgs: (args) => !Array.isArray(args) || args.length < 1,
     processor: async ({ api, args }) => api.delete(args[0]),
   },
 };
@@ -199,18 +251,54 @@ export function buildProcessorInstructionTable({
   includeRead = true,
   includeWrite = true,
 } = {}) {
+  // We intentionally keep markdown table format because many models
+  // parse tabular contracts more reliably than free-form text.
   const rows = [
     ...(includeRead ? Object.entries(READ_PROCESSORS) : []),
     ...(includeWrite ? Object.entries(WRITE_PROCESSORS) : []),
   ];
 
   return [
-    '| Method | Arg Rules | Effect |',
-    '|--------|-----------|--------|',
-    ...rows.map(([method, spec]) =>
-      `| ${Array.isArray(spec?.params) ? `${method}(${spec.params.join(', ')})` : method} | [${getArgRuleTokens(spec?.argsSchema).join(', ')}] | ${typeof spec?.effect === 'string' ? spec.effect : ''} |`
-    ),
+    'PROCESSOR_TABLE',
+    '| Method | Args | Effect |',
+    '|--------|------|--------|',
+    ...rows.map(([method, spec]) => {
+      const signature = Array.isArray(spec?.params) ? `${method}(${spec.params.join(', ')})` : method;
+      const argRules = `[${getArgRuleTokens(spec?.argsSchema).join(', ')}]`;
+      const effect = typeof spec?.effect === 'string' ? spec.effect : '';
+      return `| ${signature} | ${argRules} | ${effect} |`;
+    }),
   ].join('\n');
+}
+
+/**
+ * Compact processor usage notes used by both prompt stages.
+ * Keep this section short and only include high-impact field semantics.
+ */
+export function buildProcessorPromptNotes({
+  includeRead = true,
+  includeWrite = true,
+} = {}) {
+  // Keep notes short and high-impact to avoid token bloat.
+  // These notes complement the table with behavior-critical semantics.
+  const notes = [
+    'PROCESSOR_NOTES',
+    '- method must come from PROCESSOR_TABLE and cannot be null.',
+  ];
+
+  if (includeWrite) {
+    notes.push('- if required write args are missing/ambiguous, return action=noAction with clarification response and actions=[].');
+    notes.push('- createTask: if target date is explicit, originDate(args[0]) and startDate(args[5]) must both equal that date; dueDate(args[7]) cannot be the only concrete date.');
+    notes.push('- updateTask: args[1] must be a patch object; never output key-value tuple encoding.');
+    notes.push('- setTaskDone: entryDate(args[2]) is required and must match YYYY-MM-DD.');
+    notes.push('- when action=write and args are complete, do not ask for execution confirmation.');
+  }
+
+  if (includeRead) {
+    notes.push('- read methods are for retrieval only; do not mix write methods into action=read.');
+  }
+
+  return notes.join('\n');
 }
 
 /**
@@ -219,21 +307,28 @@ export function buildProcessorInstructionTable({
 export function buildActionJsonContract({
   allowRead = true,
 } = {}) {
+  // This contract is intentionally compact:
+  // - one output skeleton
+  // - action-specific cardinality/response rules
+  // - a small set of hard forbids to reduce malformed outputs
   const allowedTypes = allowRead
     ? ['noAction', 'read', 'write']
     : ['noAction', 'write'];
+  const readRule = allowRead
+    ? '- read => response should be null by default; non-empty string is allowed only when strictly necessary, actions.length>=1.'
+    : '- read => not allowed in this stage.';
 
   return [
-    'JSON output contract summary:',
-    '- Output exactly one JSON object.',
-    `- action: one of ${allowedTypes.join(', ')}.`,
-    '- response: required field.',
-    '- noAction => response must be a non-empty final answer string.',
-    '- read => response can be null or a non-empty helper string.',
-    '- write => response must be a non-empty confirmation-style question that explains planned writes and asks user confirmation.',
-    '- actions: required array.',
-    '- noAction => actions must be empty.',
-    '- read/write => actions must contain one or more items.',
-    '- each action item keys: reason, method, args.',
+    'ACTION_CONTRACT',
+    `- OUT={"action":"${allowedTypes.join('|')}","response":"string|null","actions":[{"reason":"string","method":"<method>","args":[...]}]}`,
+    '- noAction => response is non-empty string, actions=[].',
+    readRule,
+    '- write => response is non-empty plain statement describing planned changes, actions.length>=1.',
+    '- action item keys must be exactly: reason, method, args.',
+    '- FORBID markdown code fences.',
+    '- FORBID multiple JSON objects or extra prose before/after JSON.',
+    '- FORBID nested JSON string in response (response must be plain text or null for read).',
+    '- FORBID args key-value tuple encoding; args must be a positional array.',
+    '- FORBID confirmation request wording in write response.',
   ].join('\n');
 }

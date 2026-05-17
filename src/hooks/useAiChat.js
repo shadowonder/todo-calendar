@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { requestAssistantReply, getProviderLabel } from '../ai/index.js';
 import { useSettings } from '../context/SettingsContext.jsx';
+import { useAiPreview } from '../context/AiPreviewContext.jsx';
 
 const GREETING = 'Hello! I can help plan today\'s tasks, prioritize work, and break down next actions.';
 const MAX_USER_HISTORY = 12;
@@ -17,6 +18,11 @@ function toModelMessages(messages) {
 
 export function useAiChat({ selectedDate, tasks }) {
   const { effectiveAiConnection } = useSettings();
+  const {
+    setStructuredPlan,
+    clearStructuredPlan,
+    setStatus: setPreviewStatus,
+  } = useAiPreview();
   const [chatSending, setChatSending] = useState(false);
   const [runtimeMeta, setRuntimeMeta] = useState(null);
   const [chatMessages, setChatMessages] = useState([
@@ -51,6 +57,7 @@ export function useAiChat({ selectedDate, tasks }) {
 
     setChatMessages(nextHistory);
     setChatSending(true);
+    setPreviewStatus('loading');
 
     try {
       const result = await requestAssistantReply({
@@ -92,6 +99,18 @@ export function useAiChat({ selectedDate, tasks }) {
       });
       setRuntimeMeta(result?.meta || null);
 
+      const structuredOutput = result?.structuredOutput;
+      if (structuredOutput?.action === 'noAction') {
+        clearStructuredPlan();
+        setPreviewStatus('idle');
+      } else if (structuredOutput && typeof structuredOutput === 'object') {
+        setStructuredPlan(structuredOutput);
+        setPreviewStatus('ready');
+      } else {
+        clearStructuredPlan();
+        setPreviewStatus('idle');
+      }
+
       setChatMessages((prev) => [
         ...prev.map((msg) =>
           msg.id === assistantMsgId
@@ -107,6 +126,7 @@ export function useAiChat({ selectedDate, tasks }) {
         ),
       ]);
     } catch (err) {
+      setPreviewStatus('error');
       if (effectiveAiConnection?.type === 'native') {
         console.error('[AI Chat][Native] Request failed:', err);
       } else {

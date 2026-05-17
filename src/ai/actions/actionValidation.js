@@ -17,6 +17,10 @@ import { z } from 'zod';
  * - if needed, split base response schema and method-args schema into smaller files.
  */
 
+/**
+ * Remove markdown fence wrappers and trim whitespace.
+ * Used before JSON.parse to tolerate common model formatting noise.
+ */
 function normalizeRawJsonText(rawText) {
   const source = typeof rawText === 'string' ? rawText.trim() : '';
   if (!source) return '';
@@ -27,6 +31,10 @@ function normalizeRawJsonText(rawText) {
     .trim();
 }
 
+/**
+ * Convert zod issues into one compact human-readable error string.
+ * This helps surface exact failure paths in logs/UI.
+ */
 function toZodErrorMessage(error, fallbackMessage) {
   if (!error?.issues || !Array.isArray(error.issues) || error.issues.length === 0) {
     return fallbackMessage;
@@ -41,6 +49,13 @@ function toZodErrorMessage(error, fallbackMessage) {
   return `${fallbackMessage} ${details.join('; ')}`;
 }
 
+/**
+ * Parse raw provider output into a JSON object.
+ * Accepted forms:
+ * - `{ text: "<json>" }`
+ * - direct object payload
+ * - raw JSON string
+ */
 function parseStructuredPayload(rawOutput) {
   if (rawOutput && typeof rawOutput === 'object' && !Array.isArray(rawOutput)) {
     if (typeof rawOutput.text === 'string') {
@@ -71,6 +86,10 @@ function parseStructuredPayload(rawOutput) {
   throw new Error('Unsupported structured output payload type.');
 }
 
+/**
+ * Try parsing a string that might itself be a JSON object.
+ * Used to recover from models that put JSON into `response` as a string.
+ */
 function tryParseEmbeddedJsonObject(text) {
   const raw = typeof text === 'string' ? text.trim() : '';
   if (!raw) return null;
@@ -83,6 +102,59 @@ function tryParseEmbeddedJsonObject(text) {
   }
 }
 
+/**
+ * Lightweight plain-object guard for normalization logic.
+ */
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Generic write atomicity gate.
+ * Returns true when a `write` payload should be downgraded to `noAction`.
+ *
+ * Rules:
+ * - write with empty actions => downgrade
+ * - write action containing non-write methods => downgrade
+ * - write action flagged as no-op by method-level `isNoOpArgs` => downgrade
+ */
+function shouldDowngradeWritePayload(payload, { writeProcessors = {} } = {}) {
+  if (!isPlainObject(payload) || payload.action !== 'write') return false;
+  const actions = Array.isArray(payload.actions) ? payload.actions : [];
+  if (actions.length === 0) return true;
+
+  return actions.some((item) => {
+    const method = typeof item?.method === 'string' ? item.method : '';
+    const writeSpec = writeProcessors?.[method];
+
+    // write stage should not contain non-write methods.
+    if (!writeSpec) return true;
+
+    if (typeof writeSpec?.isNoOpArgs !== 'function') return false;
+    return Boolean(writeSpec.isNoOpArgs(item?.args));
+  });
+}
+
+/**
+ * Preserve user-facing response but remove executable mutations.
+ */
+function downgradeWritePayloadToNoAction(payload) {
+  return {
+    ...payload,
+    action: 'noAction',
+    actions: [],
+  };
+}
+
+/**
+ * Backward-compatible payload normalization.
+ *
+ * Handles:
+ * - legacy `type` key
+ * - loose action aliases (`none`, `no_action`, ...)
+ * - top-level method/args fallback
+ * - embedded JSON string inside `response`
+ */
 function normalizeLegacyPayload(payload) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
   const normalized = { ...payload };
@@ -142,7 +214,7 @@ function normalizeLegacyPayload(payload) {
   // Example:
   // {
   //   action: "noAction",
-  //   response: "{\"action\":\"noAction\",\"response\":\"你好\"}",
+  //   response: "{\"action\":\"noAction\",\"response\":\"Hello\"}",
   //   actions: []
   // }
   // We unwrap nested object if shape is recognizable.
@@ -164,6 +236,10 @@ function normalizeLegacyPayload(payload) {
   return normalized;
 }
 
+/**
+ * Build zod schema for method name validation.
+ * Uses enum when known method list is available.
+ */
 function buildMethodSchema(methodNames) {
   const uniqueMethodNames = [...new Set((methodNames || []).filter((item) => typeof item === 'string' && item.trim()))];
   if (uniqueMethodNames.length === 0) {
@@ -173,12 +249,20 @@ function buildMethodSchema(methodNames) {
   return z.enum(tuple);
 }
 
+/**
+ * Build action enum per pipeline stage.
+ * llm stage disables `read` by passing allowRead=false.
+ */
 function buildActionSchema(allowRead) {
   return allowRead
     ? z.enum(['noAction', 'read', 'write'])
     : z.enum(['noAction', 'write']);
 }
 
+/**
+ * Build the top-level structured output contract.
+ * This validates shape/cardinality; per-method args are validated later.
+ */
 function buildBaseStructuredResponseSchema({ allowRead, methodNames }) {
   return z.object({
     action: buildActionSchema(allowRead),
@@ -219,7 +303,7 @@ function buildBaseStructuredResponseSchema({ allowRead, methodNames }) {
       ctx.addIssue({
         code: 'custom',
         path: ['response'],
-        message: 'When action is "write", response must be a non-empty string asking for confirmation.',
+        message: 'When action is "write", response must be a non-empty plain text statement.',
       });
     }
 
@@ -227,6 +311,9 @@ function buildBaseStructuredResponseSchema({ allowRead, methodNames }) {
   });
 }
 
+/**
+ * Merge read/write processor definitions for method lookup.
+ */
 function buildMethodSpecMap({ readProcessors, writeProcessors }) {
   return {
     ...(readProcessors || {}),
@@ -242,6 +329,7 @@ export function parseStructuredActionResponseWithZod(rawOutput, {
   allowRead = true,
   methodNames = [],
 } = {}) {
+  // Parse + normalize first, then apply strict top-level contract validation.
   const payload = normalizeLegacyPayload(parseStructuredPayload(rawOutput));
   const baseSchema = buildBaseStructuredResponseSchema({
     allowRead,
@@ -262,6 +350,7 @@ export function validateActionArgsWithZod(payload, {
   readProcessors = {},
   writeProcessors = {},
 } = {}) {
+  // Validate every action against its zod tuple/object schema.
   const methodSpecMap = buildMethodSpecMap({ readProcessors, writeProcessors });
 
   payload.actions.forEach((action, index) => {
@@ -282,6 +371,12 @@ export function validateActionArgsWithZod(payload, {
       ));
     }
   });
+
+  // Final atomicity gate:
+  // if write operations are semantically no-op/invalid, return noAction.
+  if (shouldDowngradeWritePayload(payload, { writeProcessors })) {
+    return downgradeWritePayloadToNoAction(payload);
+  }
 
   return payload;
 }
