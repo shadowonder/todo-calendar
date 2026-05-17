@@ -54,6 +54,7 @@
         },
         "args": {
           "type": "array",
+          "items": {},
           "description": "Positional args for method. Type details are defined in the method catalog markdown, including Date_Day and Date_Month."
         }
       }

@@ -19,7 +19,6 @@ import { generateObject } from 'ai';
 import { createOpenAI as createVercelOpenAI } from '@ai-sdk/openai';
 import { z } from 'zod';
 import { buildThinkingPreview, sanitizeAssistantText } from '../../outputSanitizer.js';
-import { getOpenAIActionResponseFormat } from '../../schemas/openaiActionResponseFormat.js';
 
 const DEFAULT_OPENAI_MODEL = 'gpt-4.1-mini';
 const clientCache = new Map();
@@ -303,14 +302,15 @@ export async function askWithOpenAIStructured({
     || connection?.useVercelAiSdk === true;
 
   // If caller does not explicitly request Vercel SDK mode, use existing OpenAI SDK
-  // with JSON schema response_format for safer backward compatibility.
+  // with JSON-object mode. We keep schema validation in validation.step (zod),
+  // which avoids OpenAI strict-schema subset limits for open-ended `args`.
   if (!useVercelSdk) {
     return askWithOpenAI({
       connection,
       messages,
       systemPrompt,
       signal,
-      responseFormat: getOpenAIActionResponseFormat(),
+      responseFormat: { type: 'json_object' },
     });
   }
 
