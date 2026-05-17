@@ -117,6 +117,12 @@ function toWebLLMMessages(messages, systemPrompt) {
   const list = [];
   if (systemPrompt) list.push({ role: 'system', content: systemPrompt });
 
+  console.log('===SystemPrompt===')
+  console.log(systemPrompt)
+  console.log('===UserPrompt===')
+  console.log(messages)
+  console.log('===')
+
   for (const msg of messages || []) {
     const role = msg?.role === 'assistant' ? 'assistant' : 'user';
     const content = typeof msg?.content === 'string' ? msg.content : '';

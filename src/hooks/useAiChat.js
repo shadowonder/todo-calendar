@@ -38,7 +38,15 @@ export function useAiChat({ selectedDate, tasks }) {
     const nextHistory = [
       ...chatMessages,
       userMsg,
-      { id: assistantMsgId, role: 'assistant', text: '', thinkingPreview: '', streaming: true },
+      {
+        id: assistantMsgId,
+        role: 'assistant',
+        text: '',
+        thinkingPreview: '',
+        thinkingStep: '',
+        llmThinkingPreview: '',
+        streaming: true,
+      },
     ];
 
     setChatMessages(nextHistory);
@@ -52,7 +60,10 @@ export function useAiChat({ selectedDate, tasks }) {
         messages: toModelMessages(nextHistory),
         onStream: (event) => {
           const nextText = typeof event?.text === 'string' ? event.text : '';
-          const nextThinking = typeof event?.thinkingPreview === 'string' ? event.thinkingPreview : '';
+          const nextStep = typeof event?.thinkingStep === 'string' ? event.thinkingStep : '';
+          const nextLlmThinking = typeof event?.llmThinkingPreview === 'string'
+            ? event.llmThinkingPreview
+            : (typeof event?.thinkingPreview === 'string' ? event.thinkingPreview : '');
           const shouldReset = Boolean(event?.reset);
           if (event?.meta) setRuntimeMeta(event.meta);
           setChatMessages((prev) =>
@@ -61,9 +72,18 @@ export function useAiChat({ selectedDate, tasks }) {
               return {
                 ...msg,
                 text: shouldReset ? nextText : (nextText || msg.text || ''),
+                thinkingStep: event?.done
+                  ? ''
+                  : (nextStep || msg.thinkingStep || ''),
+                llmThinkingPreview: event?.done
+                  ? ''
+                  : (shouldReset
+                    ? nextLlmThinking
+                    : (nextLlmThinking || msg.llmThinkingPreview || '')),
+                // Backward-compatible field for existing UI fallback.
                 thinkingPreview: event?.done
                   ? ''
-                  : (shouldReset ? nextThinking : (nextThinking || msg.thinkingPreview || '')),
+                  : (shouldReset ? nextLlmThinking : (nextLlmThinking || msg.thinkingPreview || '')),
                 streaming: !event?.done,
               };
             })
@@ -79,19 +99,34 @@ export function useAiChat({ selectedDate, tasks }) {
               ...msg,
               text: result?.text || msg.text || '',
               thinkingPreview: '',
+              thinkingStep: '',
+              llmThinkingPreview: '',
               streaming: false,
             }
             : msg
         ),
       ]);
     } catch (err) {
+      if (effectiveAiConnection?.type === 'native') {
+        console.error('[AI Chat][Native] Request failed:', err);
+      } else {
+        console.error('[AI Chat] Request failed:', err);
+      }
+
       const message = effectiveAiConnection?.type === 'native'
         ? 'Native AI is temporarily unavailable. Please retry or switch profile in Settings.'
         : (err instanceof Error && err.message ? err.message : 'AI request failed.');
       setChatMessages((prev) =>
         prev.map((msg) =>
           msg.id === assistantMsgId
-            ? { ...msg, text: `Error: ${message}`, thinkingPreview: '', streaming: false }
+            ? {
+              ...msg,
+              text: `Error: ${message}`,
+              thinkingPreview: '',
+              thinkingStep: '',
+              llmThinkingPreview: '',
+              streaming: false,
+            }
             : msg
         )
       );

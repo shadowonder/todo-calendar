@@ -25,16 +25,29 @@ const DEFAULT_OPENAI_MODEL = 'gpt-4.1-mini';
 const clientCache = new Map();
 const vercelProviderCache = new Map();
 
-const STRUCTURED_ACTION_ZOD_SCHEMA = z.object({
-  type: z.enum(['noAction', 'read', 'write']),
-  actions: z.array(
-    z.object({
-      reason: z.string(),
-      method: z.string(),
-      args: z.array(z.any()),
-    })
-  ),
+const ACTION_ITEM_ZOD_SCHEMA = z.object({
+  reason: z.string(),
+  method: z.string(),
+  args: z.array(z.any()),
 });
+
+const STRUCTURED_ACTION_ZOD_SCHEMA = z.discriminatedUnion('action', [
+  z.object({
+    action: z.literal('noAction'),
+    response: z.string().min(1),
+    actions: z.array(ACTION_ITEM_ZOD_SCHEMA).max(0),
+  }),
+  z.object({
+    action: z.literal('read'),
+    response: z.string().min(1).nullable(),
+    actions: z.array(ACTION_ITEM_ZOD_SCHEMA).min(1),
+  }),
+  z.object({
+    action: z.literal('write'),
+    response: z.string().min(1),
+    actions: z.array(ACTION_ITEM_ZOD_SCHEMA).min(1),
+  }),
+]);
 
 function resolveRequestedModel(connection) {
   const modelVersion = typeof connection?.modelVersion === 'string'

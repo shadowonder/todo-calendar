@@ -303,62 +303,85 @@ export default function TaskPanel({ selectedDate, onMutate, nativeChatStatus = {
           </Box>
 
           <Box sx={{ flexGrow: 1, overflow: 'auto', px: 1.5, py: 1.2, display: 'flex', flexDirection: 'column', gap: 1 }}>
-            {chatMessages.map((m) => (
-              <Box
-                key={m.id}
-                sx={{
-                  alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
-                  maxWidth: '88%',
-                  px: 1.1,
-                  py: 0.8,
-                  borderRadius: 1,
-                  border: 1,
-                  borderColor: 'divider',
-                  bgcolor: m.role === 'user' ? 'primary.main' : 'action.hover',
-                }}
-              >
-                {m.role === 'assistant' && m.streaming && typeof m.thinkingPreview === 'string' && m.thinkingPreview.trim() && (
-                  <Box
-                    sx={{
-                      mb: 0.7,
-                      px: 0.75,
-                      py: 0.55,
-                      borderRadius: 0.9,
-                      border: 1,
-                      borderColor: 'divider',
-                      bgcolor: 'background.paper',
-                    }}
-                  >
-                    <Typography
-                      variant="caption"
-                      sx={{ display: 'block', fontSize: 10.5, fontWeight: 700, color: 'text.secondary', mb: 0.2 }}
-                    >
-                      Thinking Preview
-                    </Typography>
-                    <Typography
-                      variant="caption"
+            {chatMessages.map((m) => {
+              const stepThinking = typeof m.thinkingStep === 'string' ? m.thinkingStep.trim() : '';
+              const llmThinking = typeof m.llmThinkingPreview === 'string'
+                ? m.llmThinkingPreview.trim()
+                : (typeof m.thinkingPreview === 'string' ? m.thinkingPreview.trim() : '');
+              const hasThinkingBlock = Boolean(stepThinking || llmThinking);
+
+              return (
+                <Box
+                  key={m.id}
+                  sx={{
+                    alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
+                    maxWidth: '88%',
+                    px: 1.1,
+                    py: 0.8,
+                    borderRadius: 1,
+                    border: 1,
+                    borderColor: 'divider',
+                    bgcolor: m.role === 'user' ? 'primary.main' : 'action.hover',
+                  }}
+                >
+                  {m.role === 'assistant' && m.streaming && hasThinkingBlock && (
+                    <Box
                       sx={{
-                        color: 'text.secondary',
-                        whiteSpace: 'pre-line',
-                        display: '-webkit-box',
-                        WebkitLineClamp: 3,
-                        WebkitBoxOrient: 'vertical',
-                        overflow: 'hidden',
+                        mb: 0.7,
+                        px: 0.75,
+                        py: 0.55,
+                        borderRadius: 0.9,
+                        border: 1,
+                        borderColor: 'divider',
+                        bgcolor: 'background.paper',
                       }}
                     >
-                      {m.thinkingPreview}
-                    </Typography>
-                  </Box>
-                )}
-                <Typography
-                  variant="body2"
-                  sx={{ whiteSpace: 'pre-wrap', color: m.role === 'user' ? 'primary.contrastText' : 'text.primary', fontSize: 12.5 }}
-                >
-                  {m.text}
-                  {m.role === 'assistant' && m.streaming ? '▌' : ''}
-                </Typography>
-              </Box>
-            ))}
+                      <Typography
+                        variant="caption"
+                        sx={{ display: 'block', fontSize: 10.5, fontWeight: 700, color: 'text.secondary', mb: 0.2 }}
+                      >
+                        Thinking
+                      </Typography>
+                      {stepThinking && (
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            display: 'block',
+                            whiteSpace: 'pre-line',
+                            color: 'text.secondary',
+                            mb: llmThinking ? 0.45 : 0,
+                          }}
+                        >
+                          Step: {stepThinking}
+                        </Typography>
+                      )}
+                      {llmThinking && (
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            color: 'text.secondary',
+                            whiteSpace: 'pre-line',
+                            display: '-webkit-box',
+                            WebkitLineClamp: 3,
+                            WebkitBoxOrient: 'vertical',
+                            overflow: 'hidden',
+                          }}
+                        >
+                          LLM: {llmThinking}
+                        </Typography>
+                      )}
+                    </Box>
+                  )}
+                  <Typography
+                    variant="body2"
+                    sx={{ whiteSpace: 'pre-wrap', color: m.role === 'user' ? 'primary.contrastText' : 'text.primary', fontSize: 12.5 }}
+                  >
+                    {m.text}
+                    {m.role === 'assistant' && m.streaming ? '▌' : ''}
+                  </Typography>
+                </Box>
+              );
+            })}
             {chatSending && (
               <Typography variant="caption" color="text.secondary" sx={{ px: 0.5 }}>
                 AI is typing...

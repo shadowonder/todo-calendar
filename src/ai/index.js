@@ -15,10 +15,11 @@
 export { runAiPipeline } from './pipeline.js';
 export {
   getProviderLabel,
-  requestAssistantReply,
   preloadNativeModel,
   releaseNativeModel,
+  requestAssistantReply as requestAssistantReplyDirect,
 } from './model/modelRouter.js';
+export { requestAssistantReply } from './chatPipelineAdapter.js';
 export {
   OPENAI_ACTION_RESPONSE_FORMAT,
   getOpenAIActionResponseFormat,

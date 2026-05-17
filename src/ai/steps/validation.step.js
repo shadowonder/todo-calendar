@@ -30,13 +30,34 @@ export async function runValidationStep({
     ...Object.keys(WRITE_PROCESSORS),
   ];
 
-  const payload = parseStructuredActionResponseWithZod(rawModelOutput, {
-    allowRead,
-    methodNames,
-  });
+  try {
+    const payload = parseStructuredActionResponseWithZod(rawModelOutput, {
+      allowRead,
+      methodNames,
+    });
 
-  return validateActionArgsWithZod(payload, {
-    readProcessors: READ_PROCESSORS,
-    writeProcessors: WRITE_PROCESSORS,
-  });
+    return validateActionArgsWithZod(payload, {
+      readProcessors: READ_PROCESSORS,
+      writeProcessors: WRITE_PROCESSORS,
+    });
+  } catch (error) {
+    const provider = typeof rawModelOutput?.provider === 'string' ? rawModelOutput.provider : '';
+    const rawText = typeof rawModelOutput?.text === 'string' ? rawModelOutput.text.trim() : '';
+
+    // Local model sometimes returns plain text instead of strict structured JSON.
+    // We keep pipeline alive and surface a user-facing response instead of hard fail.
+    if (provider === 'webllm' && rawText) {
+      console.warn('[AI Validation][WebLLM] Structured output validation failed, fallback to noAction response.', {
+        error,
+        rawModelOutput,
+      });
+      return {
+        action: 'noAction',
+        response: rawText,
+        actions: [],
+      };
+    }
+
+    throw error;
+  }
 }

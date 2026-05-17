@@ -224,13 +224,16 @@ export function buildActionJsonContract({
     : ['noAction', 'write'];
 
   return [
-    'Output JSON contract:',
-    '- Return exactly one JSON object. No markdown. No extra text.',
-    `- type must be one of: ${allowedTypes.join(', ')}`,
-    '- actions must be an array.',
-    '- If type is "noAction", actions must be [].',
-    '- If type is "read" or "write", actions must contain one or more items.',
-    '- Each action item must be:',
-    '  {"reason": "...", "method": "...", "args": [...] }',
+    'JSON output contract summary:',
+    '- Output exactly one JSON object.',
+    `- action: one of ${allowedTypes.join(', ')}.`,
+    '- response: required field.',
+    '- noAction => response must be a non-empty final answer string.',
+    '- read => response can be null or a non-empty helper string.',
+    '- write => response must be a non-empty confirmation-style question that explains planned writes and asks user confirmation.',
+    '- actions: required array.',
+    '- noAction => actions must be empty.',
+    '- read/write => actions must contain one or more items.',
+    '- each action item keys: reason, method, args.',
   ].join('\n');
 }

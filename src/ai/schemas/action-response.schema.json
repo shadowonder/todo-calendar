@@ -2,15 +2,19 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "todo-calendar/action-response.schema.json",
   "title": "Todo Calendar Compact Action Response",
-  "description": "Compact protocol used by the AI pipeline. AI only returns routing type and an ordered action list.",
+  "description": "Compact protocol used by the AI pipeline. AI returns routing action, user-facing response text, and an ordered action list.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["type", "actions"],
+  "required": ["action", "response", "actions"],
   "properties": {
-    "type": {
+    "action": {
       "type": "string",
       "enum": ["noAction", "read", "write"],
       "description": "Routing target. noAction = no DB call, read = DB read actions, write = DB write actions."
+    },
+    "response": {
+      "type": ["string", "null"],
+      "description": "Global user-facing response text. Must be non-empty for noAction/write; read may use null or non-empty string."
     },
     "actions": {
       "type": "array",
@@ -58,19 +62,27 @@
   "anyOf": [
     {
       "properties": {
-        "type": { "const": "noAction" },
+        "action": { "const": "noAction" },
+        "response": { "type": "string", "minLength": 1 },
         "actions": { "type": "array", "maxItems": 0 }
       }
     },
     {
       "properties": {
-        "type": { "const": "read" },
+        "action": { "const": "read" },
+        "response": {
+          "anyOf": [
+            { "const": null },
+            { "type": "string", "minLength": 1 }
+          ]
+        },
         "actions": { "type": "array", "minItems": 1 }
       }
     },
     {
       "properties": {
-        "type": { "const": "write" },
+        "action": { "const": "write" },
+        "response": { "type": "string", "minLength": 1 },
         "actions": { "type": "array", "minItems": 1 }
       }
     }

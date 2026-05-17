@@ -53,7 +53,7 @@ function parseStructuredPayload(rawOutput) {
       }
     }
 
-    if ('type' in rawOutput || 'actions' in rawOutput) {
+    if ('action' in rawOutput || 'type' in rawOutput || 'actions' in rawOutput) {
       return rawOutput;
     }
   }
@@ -71,6 +71,96 @@ function parseStructuredPayload(rawOutput) {
   throw new Error('Unsupported structured output payload type.');
 }
 
+function tryParseEmbeddedJsonObject(text) {
+  const raw = typeof text === 'string' ? text.trim() : '';
+  if (!raw) return null;
+  if (!(raw.startsWith('{') && raw.endsWith('}'))) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeLegacyPayload(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  const normalized = { ...payload };
+
+  // Legacy key compatibility: type -> action
+  if (!('action' in normalized) && typeof normalized.type === 'string') {
+    normalized.action = normalized.type;
+  }
+
+  // Loose action normalization for local models.
+  if (typeof normalized.action === 'string') {
+    const actionValue = normalized.action.trim();
+    if (actionValue === 'none') normalized.action = 'noAction';
+    if (actionValue === 'NO_ACTION') normalized.action = 'noAction';
+  }
+
+  // If actions is a single object, wrap as array.
+  if (normalized.actions && !Array.isArray(normalized.actions) && typeof normalized.actions === 'object') {
+    normalized.actions = [normalized.actions];
+  }
+
+  // If actions is missing but method/args appear at top-level, wrap into one action.
+  if (!Array.isArray(normalized.actions) && typeof normalized.method === 'string') {
+    normalized.actions = [{
+      reason: typeof normalized.reason === 'string' ? normalized.reason : '',
+      method: normalized.method,
+      args: Array.isArray(normalized.args) ? normalized.args : [],
+    }];
+  }
+
+  if (!('action' in normalized)) {
+    normalized.action = Array.isArray(normalized.actions) && normalized.actions.length > 0
+      ? 'read'
+      : 'noAction';
+  }
+
+  if (!('response' in normalized)) {
+    if (normalized.action === 'noAction') {
+      if (typeof normalized.message === 'string') {
+        normalized.response = normalized.message;
+      } else if (typeof normalized.answer === 'string') {
+        normalized.response = normalized.answer;
+      } else if (typeof normalized.text === 'string') {
+        normalized.response = normalized.text;
+      } else {
+        normalized.response = '';
+      }
+    } else {
+      normalized.response = null;
+    }
+  }
+
+  // Some local models return the whole JSON object as a string inside `response`.
+  // Example:
+  // {
+  //   action: "noAction",
+  //   response: "{\"action\":\"noAction\",\"response\":\"你好\"}",
+  //   actions: []
+  // }
+  // We unwrap nested object if shape is recognizable.
+  if (typeof normalized.response === 'string') {
+    const embedded = tryParseEmbeddedJsonObject(normalized.response);
+    if (embedded) {
+      if (typeof embedded.action === 'string' && !('action' in payload)) {
+        normalized.action = embedded.action;
+      }
+      if (typeof embedded.response === 'string') {
+        normalized.response = embedded.response;
+      }
+      if (Array.isArray(embedded.actions) && (!Array.isArray(normalized.actions) || normalized.actions.length === 0)) {
+        normalized.actions = embedded.actions;
+      }
+    }
+  }
+
+  return normalized;
+}
+
 function buildMethodSchema(methodNames) {
   const uniqueMethodNames = [...new Set((methodNames || []).filter((item) => typeof item === 'string' && item.trim()))];
   if (uniqueMethodNames.length === 0) {
@@ -80,7 +170,7 @@ function buildMethodSchema(methodNames) {
   return z.enum(tuple);
 }
 
-function buildTypeSchema(allowRead) {
+function buildActionSchema(allowRead) {
   return allowRead
     ? z.enum(['noAction', 'read', 'write'])
     : z.enum(['noAction', 'write']);
@@ -88,7 +178,8 @@ function buildTypeSchema(allowRead) {
 
 function buildBaseStructuredResponseSchema({ allowRead, methodNames }) {
   return z.object({
-    type: buildTypeSchema(allowRead),
+    action: buildActionSchema(allowRead),
+    response: z.string().trim().min(1).nullable(),
     actions: z.array(
       z.object({
         reason: z.string().trim().min(1, 'reason must be a non-empty string.'),
@@ -97,21 +188,39 @@ function buildBaseStructuredResponseSchema({ allowRead, methodNames }) {
       })
     ),
   }).superRefine((value, ctx) => {
-    if (value.type === 'noAction' && value.actions.length !== 0) {
+    if (value.action === 'noAction' && value.actions.length !== 0) {
       ctx.addIssue({
         code: 'custom',
         path: ['actions'],
-        message: 'When type is "noAction", actions must be [].',
+        message: 'When action is "noAction", actions must be [].',
       });
     }
 
-    if ((value.type === 'read' || value.type === 'write') && value.actions.length < 1) {
+    if ((value.action === 'read' || value.action === 'write') && value.actions.length < 1) {
       ctx.addIssue({
         code: 'custom',
         path: ['actions'],
-        message: `When type is "${value.type}", actions must contain at least 1 item.`,
+        message: `When action is "${value.action}", actions must contain at least 1 item.`,
       });
     }
+
+    if (value.action === 'noAction' && typeof value.response !== 'string') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['response'],
+        message: 'When action is "noAction", response must be a non-empty string.',
+      });
+    }
+
+    if (value.action === 'write' && typeof value.response !== 'string') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['response'],
+        message: 'When action is "write", response must be a non-empty string asking for confirmation.',
+      });
+    }
+
+    // For read, response can stay null or non-empty string.
   });
 }
 
@@ -130,7 +239,7 @@ export function parseStructuredActionResponseWithZod(rawOutput, {
   allowRead = true,
   methodNames = [],
 } = {}) {
-  const payload = parseStructuredPayload(rawOutput);
+  const payload = normalizeLegacyPayload(parseStructuredPayload(rawOutput));
   const baseSchema = buildBaseStructuredResponseSchema({
     allowRead,
     methodNames,

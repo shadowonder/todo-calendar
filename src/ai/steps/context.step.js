@@ -14,7 +14,7 @@
  * - analyzer, retriever, query rewrite, plugin/tool context can be appended here.
  */
 import { buildActionJsonContract, buildProcessorInstructionTable } from '../actions/actionCatalog.js';
-import { buildFirstActionPrompt } from '../prompts/basePrompt.js';
+import { buildPipelineSystemPrompt } from '../prompts/basePrompt.js';
 import { OPENAI_ACTION_RESPONSE_FORMAT } from '../schemas/openaiActionResponseFormat.js';
 
 function resolveNowIso(currentTime) {
@@ -49,10 +49,12 @@ export async function runContextStep({
     includeWrite: true,
   });
   const actionJsonContract = buildActionJsonContract({ allowRead });
-  const basePrompt = buildFirstActionPrompt({
+  const basePrompt = buildPipelineSystemPrompt({
     selectedDate,
     tasks,
-    userQuery: normalizedPrompt,
+    currentTime: nowIso,
+    timezone: tz,
+    allowRead,
   });
 
   return {
@@ -67,12 +69,7 @@ export async function runContextStep({
       strict: Boolean(OPENAI_ACTION_RESPONSE_FORMAT?.json_schema?.strict),
     },
     modelInput: {
-      systemPrompt: [
-        basePrompt,
-        '',
-        `Current time (ISO): ${nowIso}`,
-        `Timezone: ${tz}`,
-      ].join('\n'),
+      systemPrompt: basePrompt,
       userPromptText: normalizedPrompt || 'No user prompt provided.',
       allowRead,
       preferVercelSdk,

@@ -88,6 +88,7 @@ export default function App() {
         });
       })
       .catch((_err) => {
+        console.error('[Native Model] Preload failed:', _err);
         if (cancelled) return;
         setNativeModelStatus((prev) => ({ phase: 'error', tier: prev.tier || '' }));
         setNativeBanner({
@@ -115,7 +116,7 @@ export default function App() {
         setNativeModelStatus({ phase: 'idle', tier: '' });
       })
       .catch(() => {
-        // Ignore release errors while switching provider mode.
+        console.warn('[Native Model] Release failed while switching provider mode.');
       });
 
     return () => {
