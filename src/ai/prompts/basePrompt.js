@@ -1,7 +1,22 @@
+/**
+ * AI Layer: prompt resources
+ *
+ * Responsibilities:
+ * - define reusable base prompt builders for chat/action planning
+ * - keep prompt wording centralized and composable
+ *
+ * Non-responsibilities:
+ * - do not call model providers
+ * - do not validate model outputs
+ * - do not execute actions or touch database/UI
+ *
+ * Future extension:
+ * - split into prompt fragments/templates as context builder evolves.
+ */
 import {
   buildActionJsonContract,
   buildProcessorInstructionTable,
-} from './actionCatalog.js';
+} from '../actions/actionCatalog.js';
 
 const MAX_CONTEXT_TASKS = 12;
 const MAX_RESULT_CHARS = 8000;
@@ -141,4 +156,3 @@ export function buildSecondActionPrompt({
     buildActionJsonContract({ allowRead: includeReadInstructions }),
   ].join('\n');
 }
-

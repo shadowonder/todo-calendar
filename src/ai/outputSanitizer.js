@@ -1,3 +1,19 @@
+/**
+ * AI Layer: output sanitizer utility
+ *
+ * Responsibilities:
+ * - normalize raw model text across providers
+ * - strip hidden thinking tags from final assistant text
+ * - expose a short thinking preview for frontend display when available
+ *
+ * Non-responsibilities:
+ * - do not validate structured action schema
+ * - do not route models
+ * - do not execute actions
+ *
+ * Future extension:
+ * - add provider-specific normalization quirks in this utility file.
+ */
 function normalizeLineBreaks(text) {
   return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 }

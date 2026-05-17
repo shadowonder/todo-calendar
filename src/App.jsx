@@ -17,7 +17,7 @@ import {
 import CalendarPage from './pages/CalendarPage.jsx';
 import NotesPage from './pages/NotesPage.jsx';
 import SettingsPage from './pages/SettingsPage.jsx';
-import { preloadNativeModel, releaseNativeModel } from './ai/client.js';
+import { preloadNativeModel, releaseNativeModel } from './ai/index.js';
 import { getTierLabel } from './ai/nativeModels.js';
 import { useColorMode } from './context/ThemeContext.jsx';
 import { useSettings } from './context/SettingsContext.jsx';

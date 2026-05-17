@@ -1,8 +1,40 @@
+/**
+ * AI Layer: OpenAI provider
+ *
+ * Responsibilities:
+ * - handle OpenAI connection details and request/response adaptation
+ * - expose provider-level methods for normal chat and structured output modes
+ *
+ * Non-responsibilities:
+ * - do not orchestrate pipeline order
+ * - do not choose provider routing
+ * - do not validate business action arguments
+ *
+ * Future extension:
+ * - progressively migrate OpenAI calls to Vercel AI SDK from this provider
+ *   without changing pipeline.js / steps/.
+ */
 import OpenAI from 'openai';
-import { buildThinkingPreview, sanitizeAssistantText } from '../outputSanitizer.js';
+import { generateObject } from 'ai';
+import { createOpenAI as createVercelOpenAI } from '@ai-sdk/openai';
+import { z } from 'zod';
+import { buildThinkingPreview, sanitizeAssistantText } from '../../outputSanitizer.js';
+import { getOpenAIActionResponseFormat } from '../../schemas/openaiActionResponseFormat.js';
 
 const DEFAULT_OPENAI_MODEL = 'gpt-4.1-mini';
 const clientCache = new Map();
+const vercelProviderCache = new Map();
+
+const STRUCTURED_ACTION_ZOD_SCHEMA = z.object({
+  type: z.enum(['noAction', 'read', 'write']),
+  actions: z.array(
+    z.object({
+      reason: z.string(),
+      method: z.string(),
+      args: z.array(z.any()),
+    })
+  ),
+});
 
 function resolveRequestedModel(connection) {
   const modelVersion = typeof connection?.modelVersion === 'string'
@@ -41,6 +73,26 @@ function toOpenAIMessages(messages, systemPrompt) {
     list.push({ role, content });
   }
   return list;
+}
+
+function toVercelPrompt(messages, systemPrompt) {
+  const lines = [];
+  if (systemPrompt) {
+    lines.push('[SYSTEM]');
+    lines.push(systemPrompt);
+    lines.push('');
+  }
+
+  for (const msg of messages || []) {
+    const role = msg?.role === 'assistant' ? 'ASSISTANT' : 'USER';
+    const content = typeof msg?.content === 'string' ? msg.content.trim() : '';
+    if (!content) continue;
+    lines.push(`[${role}]`);
+    lines.push(content);
+    lines.push('');
+  }
+
+  return lines.join('\n').trim();
 }
 
 function extractText(content) {
@@ -101,7 +153,26 @@ function getClient({ apiKey, baseURL }) {
   return client;
 }
 
-export async function askWithOpenAI({ connection, messages, systemPrompt, signal, onStream }) {
+function getVercelProvider({ apiKey, baseURL }) {
+  const key = `${baseURL || 'default'}::${apiKey}`;
+  if (vercelProviderCache.has(key)) return vercelProviderCache.get(key);
+
+  const provider = createVercelOpenAI({
+    apiKey,
+    ...(baseURL ? { baseURL } : {}),
+  });
+  vercelProviderCache.set(key, provider);
+  return provider;
+}
+
+export async function askWithOpenAI({
+  connection,
+  messages,
+  systemPrompt,
+  signal,
+  onStream,
+  responseFormat,
+}) {
   const apiKey = connection?.auth?.key?.trim();
   if (!apiKey) {
     throw new Error('OpenAI API key is empty. Please set it in Settings -> Model Connection -> API Key.');
@@ -109,7 +180,7 @@ export async function askWithOpenAI({ connection, messages, systemPrompt, signal
 
   const baseURL = normalizeBaseURL(connection?.modelUrl);
   const requestedModel = resolveRequestedModel(connection);
-  const electronOpenAI = getElectronOpenAIBridge();
+  const electronOpenAI = responseFormat ? null : getElectronOpenAIBridge();
 
   if (electronOpenAI) {
     const response = await electronOpenAI({
@@ -135,7 +206,9 @@ export async function askWithOpenAI({ connection, messages, systemPrompt, signal
 
   const client = getClient({ apiKey, baseURL });
 
-  const useStreaming = typeof onStream === 'function';
+  // When structured JSON schema format is requested, keep non-streaming mode
+  // to avoid provider-specific streaming format edge cases.
+  const useStreaming = typeof onStream === 'function' && !responseFormat;
 
   if (useStreaming) {
     const stream = await client.chat.completions.create(
@@ -176,6 +249,7 @@ export async function askWithOpenAI({ connection, messages, systemPrompt, signal
       model: requestedModel,
       temperature: 0.3,
       messages: toOpenAIMessages(messages, systemPrompt),
+      ...(responseFormat ? { response_format: responseFormat } : {}),
     },
     { signal }
   );
@@ -191,5 +265,57 @@ export async function askWithOpenAI({ connection, messages, systemPrompt, signal
       model: completion?.model || requestedModel,
     },
     thinkingPreview: buildThinkingPreview(rawContent),
+  };
+}
+
+/**
+ * Minimal Vercel AI SDK structured call path.
+ * This is intentionally opt-in so existing OpenAI SDK behavior remains unchanged.
+ */
+export async function askWithOpenAIStructured({
+  connection,
+  messages,
+  systemPrompt,
+  signal,
+}) {
+  const apiKey = connection?.auth?.key?.trim();
+  if (!apiKey) {
+    throw new Error('OpenAI API key is empty. Please set it in Settings -> Model Connection -> API Key.');
+  }
+
+  const baseURL = normalizeBaseURL(connection?.modelUrl);
+  const requestedModel = resolveRequestedModel(connection);
+  const useVercelSdk = connection?.runtime?.openaiSdk === 'vercel-ai'
+    || connection?.modelProvider === 'vercel-ai'
+    || connection?.useVercelAiSdk === true;
+
+  // If caller does not explicitly request Vercel SDK mode, use existing OpenAI SDK
+  // with JSON schema response_format for safer backward compatibility.
+  if (!useVercelSdk) {
+    return askWithOpenAI({
+      connection,
+      messages,
+      systemPrompt,
+      signal,
+      responseFormat: getOpenAIActionResponseFormat(),
+    });
+  }
+
+  const provider = getVercelProvider({ apiKey, baseURL });
+  const prompt = toVercelPrompt(messages, systemPrompt);
+  const result = await generateObject({
+    model: provider(requestedModel),
+    schema: STRUCTURED_ACTION_ZOD_SCHEMA,
+    prompt,
+    temperature: 0.3,
+    abortSignal: signal,
+  });
+
+  const text = JSON.stringify(result.object);
+  return {
+    text,
+    provider: 'openai',
+    meta: { model: requestedModel, sdk: 'vercel-ai' },
+    thinkingPreview: '',
   };
 }

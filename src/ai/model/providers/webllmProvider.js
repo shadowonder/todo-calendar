@@ -1,5 +1,20 @@
-import { resolveNativeModelSelection } from '../nativeModels.js';
-import { buildThinkingPreview, sanitizeAssistantText } from '../outputSanitizer.js';
+/**
+ * AI Layer: WebLLM provider
+ *
+ * Responsibilities:
+ * - manage browser/native WebLLM engine lifecycle
+ * - execute WebLLM inference requests and stream text updates
+ *
+ * Non-responsibilities:
+ * - do not route provider selection
+ * - do not validate structured output contracts
+ * - do not execute business actions
+ *
+ * Future extension:
+ * - add richer candidate fallback policies and model warmup telemetry here.
+ */
+import { resolveNativeModelSelection } from '../../nativeModels.js';
+import { buildThinkingPreview, sanitizeAssistantText } from '../../outputSanitizer.js';
 
 let cachedModelId = null;
 let cachedEnginePromise = null;

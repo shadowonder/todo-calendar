@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { requestAssistantReply, getProviderLabel } from '../ai/client.js';
+import { requestAssistantReply, getProviderLabel } from '../ai/index.js';
 import { useSettings } from '../context/SettingsContext.jsx';
 
 const GREETING = 'Hello! I can help plan today\'s tasks, prioritize work, and break down next actions.';

@@ -1,4 +1,20 @@
-import configJson from './native-model-config.json';
+/**
+ * AI Layer: temporary frontend adapter for native model profiles
+ *
+ * Responsibilities:
+ * - expose native model tier options to frontend settings/chat entry
+ * - resolve auto-tier recommendation from runtime hints
+ *
+ * Non-responsibilities:
+ * - do not execute pipeline steps
+ * - do not call LLM providers directly
+ * - do not validate structured output
+ *
+ * Future extension:
+ * - if model management gets complex, this can move to model/ or a dedicated
+ *   frontend adapter layer without touching pipeline orchestration.
+ */
+import configJson from './model/config/native-model-config.json';
 
 const AUTO_TIER_ID = 'auto';
 const FALLBACK_CONFIG = {
