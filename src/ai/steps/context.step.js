@@ -14,7 +14,10 @@
  * - analyzer, retriever, query rewrite, plugin/tool context can be appended here.
  */
 import { buildActionJsonContract, buildProcessorInstructionTable } from '../actions/actionCatalog.js';
-import { buildPipelineSystemPrompt } from '../prompts/basePrompt.js';
+import {
+  buildLlmSystemPrompt,
+  buildPreflightSystemPrompt,
+} from '../prompts/basePrompt.js';
 import { OPENAI_ACTION_RESPONSE_FORMAT } from '../schemas/openaiActionResponseFormat.js';
 
 function resolveNowIso(currentTime) {
@@ -49,19 +52,28 @@ export async function runContextStep({
     includeWrite: true,
   });
   const actionJsonContract = buildActionJsonContract({ allowRead });
-  const basePrompt = buildPipelineSystemPrompt({
+  const preflightPrompt = buildPreflightSystemPrompt({
     selectedDate,
     tasks,
     currentTime: nowIso,
     timezone: tz,
     allowRead,
   });
+  const llmPrompt = buildLlmSystemPrompt({
+    selectedDate,
+    tasks,
+    currentTime: nowIso,
+    timezone: tz,
+    allowRead: false,
+  });
 
   return {
+    selectedDate,
+    sourceTasks: Array.isArray(tasks) ? tasks : [],
     userPrompt: normalizedPrompt,
     currentTime: nowIso,
     timezone: tz,
-    basePrompt,
+    basePrompt: llmPrompt,
     actionInstructionTable,
     actionJsonContract,
     outputSchemaInfo: {
@@ -69,7 +81,10 @@ export async function runContextStep({
       strict: Boolean(OPENAI_ACTION_RESPONSE_FORMAT?.json_schema?.strict),
     },
     modelInput: {
-      systemPrompt: basePrompt,
+      // Keep a default prompt for backward compatibility.
+      systemPrompt: preflightPrompt,
+      preflightSystemPrompt: preflightPrompt,
+      llmSystemPrompt: llmPrompt,
       userPromptText: normalizedPrompt || 'No user prompt provided.',
       allowRead,
       preferVercelSdk,

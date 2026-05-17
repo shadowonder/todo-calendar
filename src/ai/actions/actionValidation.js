@@ -97,6 +97,9 @@ function normalizeLegacyPayload(payload) {
     const actionValue = normalized.action.trim();
     if (actionValue === 'none') normalized.action = 'noAction';
     if (actionValue === 'NO_ACTION') normalized.action = 'noAction';
+    if (actionValue === 'no_action' || actionValue === 'no-action' || actionValue === 'NoAction') {
+      normalized.action = 'noAction';
+    }
   }
 
   // If actions is a single object, wrap as array.

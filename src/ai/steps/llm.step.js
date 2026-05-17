@@ -21,9 +21,19 @@ export async function runLlmStep({
   signal,
   onStream,
 } = {}) {
+  const stageContext = {
+    ...(context || {}),
+    modelInput: {
+      ...(context?.modelInput || {}),
+      systemPrompt: context?.modelInput?.llmSystemPrompt
+        || context?.modelInput?.systemPrompt
+        || '',
+    },
+  };
+
   return requestStructuredOutput({
     connection,
-    context,
+    context: stageContext,
     signal,
     onStream,
   });

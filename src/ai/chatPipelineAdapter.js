@@ -125,7 +125,7 @@ export async function requestAssistantReply({
     provider: 'pipeline',
     meta: {
       ...(latestMeta || {}),
-      pipeline: 'context -> llm -> validation',
+      pipeline: 'context -> preflight -> (optional) read-context -> (optional) llm -> validation',
       structuredAction: structured?.action || 'unknown',
       actionCount: Array.isArray(structured?.actions) ? structured.actions.length : 0,
     },
