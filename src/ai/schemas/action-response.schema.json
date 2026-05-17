@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "todo-calendar/action-response.schema.json",
+  "title": "Todo Calendar Compact Action Response",
+  "description": "Compact protocol used by the AI pipeline. AI only returns routing type and an ordered action list.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "actions"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": ["noAction", "read", "write"],
+      "description": "Routing target. noAction = no DB call, read = DB read actions, write = DB write actions."
+    },
+    "actions": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/actionItem"
+      },
+      "description": "Ordered method calls. Each action includes reason + method + args."
+    }
+  },
+  "$defs": {
+    "actionItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "method", "args"],
+      "properties": {
+        "reason": {
+          "type": "string",
+          "description": "Why this action is needed for the user request."
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "getTasksByDate",
+            "getGridTasks",
+            "getTaskById",
+            "searchTasks",
+            "searchTasksByTag",
+            "getMonthTaskCounts",
+            "getArchivedTasks",
+            "createTask",
+            "updateTask",
+            "setTaskDone",
+            "deleteTask"
+          ],
+          "description": "Method name from the predefined method catalog."
+        },
+        "args": {
+          "type": "array",
+          "description": "Positional args for method. Type details are defined in the method catalog markdown, including Date_Day and Date_Month."
+        }
+      }
+    }
+  },
+  "anyOf": [
+    {
+      "properties": {
+        "type": { "const": "noAction" },
+        "actions": { "type": "array", "maxItems": 0 }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "read" },
+        "actions": { "type": "array", "minItems": 1 }
+      }
+    },
+    {
+      "properties": {
+        "type": { "const": "write" },
+        "actions": { "type": "array", "minItems": 1 }
+      }
+    }
+  ]
+}
