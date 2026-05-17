@@ -6,6 +6,8 @@ import { getMemoryGridTasks } from '../hooks/useTasks.js';
 import { resolveTaskColor } from '../constants/taskColors.js';
 import { AiPreviewProvider, useAiPreview } from '../context/AiPreviewContext.jsx';
 import { derivePreviewTasksMap } from '../ai/preview/derivePreviewTasksMap.js';
+import { WRITE_PROCESSORS } from '../ai/actions/actionCatalog.js';
+import { validateActionArgsWithZod } from '../ai/actions/actionValidation.js';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -69,10 +71,98 @@ function getPreviewVisualStyle(previewStatus, theme) {
   return null;
 }
 
+function getPlanActionPalette(theme) {
+  const isDark = theme.palette.mode === 'dark';
+
+  if (isDark) {
+    return {
+      cancelBg: '#212529',
+      cancelBorder: '#495057',
+      cancelText: '#c1c7cd',
+      cancelHoverBg: '#343a40',
+      cancelHoverBorder: '#868e96',
+      cancelHoverText: '#f2f4f8',
+      confirmBg: '#0f62fe',
+      confirmText: '#ffffff',
+      confirmHoverBg: '#228be6',
+      confirmShadow: '0 10px 22px rgba(15, 98, 254, 0.34)',
+      confirmHoverShadow: '0 12px 26px rgba(34, 139, 230, 0.4)',
+    };
+  }
+
+  return {
+    cancelBg: '#ffffff',
+    cancelBorder: '#ced4da',
+    cancelText: '#495057',
+    cancelHoverBg: '#f8f9fa',
+    cancelHoverBorder: '#adb5bd',
+    cancelHoverText: '#212529',
+    confirmBg: '#0f62fe',
+    confirmText: '#ffffff',
+    confirmHoverBg: '#1c7ed6',
+    confirmShadow: '0 9px 18px rgba(15, 98, 254, 0.25)',
+    confirmHoverShadow: '0 11px 22px rgba(28, 126, 214, 0.32)',
+  };
+}
+
+function getTaskWriteApi() {
+  const db = globalThis?.window?.db || globalThis?.db;
+  const tasks = db?.tasks;
+  if (!tasks) return null;
+
+  return {
+    create: (data) => tasks.create(data),
+    update: (id, patch) => tasks.update(id, patch),
+    setDone: (id, done, entryDate) => tasks.setDone(id, done, entryDate),
+    delete: (id) => tasks.delete(id),
+  };
+}
+
+async function applyStructuredWritePlan(plan) {
+  if (!plan || plan.action !== 'write' || !Array.isArray(plan.actions) || plan.actions.length === 0) {
+    return { applied: 0, skipped: true };
+  }
+
+  const validated = validateActionArgsWithZod(plan, {
+    readProcessors: {},
+    writeProcessors: WRITE_PROCESSORS,
+  });
+
+  if (!validated || validated.action !== 'write' || !Array.isArray(validated.actions) || validated.actions.length === 0) {
+    return { applied: 0, skipped: true };
+  }
+
+  const api = getTaskWriteApi();
+  if (!api) {
+    throw new Error('Task write API is unavailable.');
+  }
+
+  let applied = 0;
+  for (const action of validated.actions) {
+    const methodName = typeof action?.method === 'string' ? action.method : '';
+    const spec = WRITE_PROCESSORS[methodName];
+    if (!spec || typeof spec.processor !== 'function') continue;
+
+    const args = Array.isArray(action?.args) ? action.args : [];
+    await spec.processor({ api, args });
+    applied += 1;
+  }
+
+  return { applied, skipped: false };
+}
+
 function CalendarPageContent({ nativeChatStatus = { enabled: false, phase: 'idle', tier: '' } }) {
   const today = new Date();
   const theme = useTheme();
-  const { structuredPlan } = useAiPreview();
+  const { structuredPlan, clearStructuredPlan } = useAiPreview();
+  const showPlanActionButtons = Boolean(
+    structuredPlan
+    && typeof structuredPlan === 'object'
+    && Object.keys(structuredPlan).length > 0
+  );
+  const planActionPalette = useMemo(() => getPlanActionPalette(theme), [theme]);
+  const [isApplying, setIsApplying] = useState(false);
+  const [tasksReloadNonce, setTasksReloadNonce] = useState(0);
 
   // view month (independent from selected date)
   const [current, setCurrent] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
@@ -172,12 +262,30 @@ function CalendarPageContent({ nativeChatStatus = { enabled: false, phase: 'idle
     setSelectedDate(todayStr());
   };
 
+  const handleConfirmApply = async () => {
+    if (isApplying) return;
+    if (!structuredPlan || structuredPlan.action !== 'write') return;
+
+    setIsApplying(true);
+    try {
+      await applyStructuredWritePlan(structuredPlan);
+      await loadGridTasks();
+      setTasksReloadNonce((prev) => prev + 1);
+      clearStructuredPlan();
+    } catch (error) {
+      console.error('[AI Apply] Failed to apply structured plan:', error);
+    } finally {
+      setIsApplying(false);
+    }
+  };
+
   return (
     <Box sx={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
       <TaskPanel
         selectedDate={selectedDate}
         onMutate={loadGridTasks}
         nativeChatStatus={nativeChatStatus}
+        tasksReloadNonce={tasksReloadNonce}
       />
 
       <Box sx={{ flexGrow: 1, p: 3, overflow: 'auto' }}>
@@ -353,6 +461,86 @@ function CalendarPageContent({ nativeChatStatus = { enabled: false, phase: 'idle
             })}
           </Box>
         </Paper>
+
+        {showPlanActionButtons && (
+          <Box
+            sx={{
+              mt: 1.5,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 1,
+            }}
+          >
+            <Typography
+              variant="body2"
+              sx={{
+                color: 'text.secondary',
+                fontWeight: 600,
+                letterSpacing: 0.1,
+                pl: 0.2,
+              }}
+            >
+              Apply above changes?
+            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Button
+              variant="contained"
+              size="small"
+              disableElevation
+              sx={{
+                minWidth: 96,
+                px: 1.6,
+                borderRadius: 999,
+                textTransform: 'none',
+                fontWeight: 700,
+                letterSpacing: 0.1,
+                bgcolor: planActionPalette.cancelBg,
+                color: planActionPalette.cancelText,
+                border: '1px solid',
+                borderColor: planActionPalette.cancelBorder,
+                boxShadow: 'none',
+                '&:hover': {
+                  bgcolor: planActionPalette.cancelHoverBg,
+                  color: planActionPalette.cancelHoverText,
+                  borderColor: planActionPalette.cancelHoverBorder,
+                  boxShadow: 'none',
+                },
+              }}
+              onClick={clearStructuredPlan}
+              disabled={isApplying}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="contained"
+              size="small"
+              disableElevation
+              sx={{
+                minWidth: 106,
+                px: 1.95,
+                borderRadius: 999,
+                textTransform: 'none',
+                fontWeight: 800,
+                letterSpacing: 0.18,
+                color: planActionPalette.confirmText,
+                bgcolor: planActionPalette.confirmBg,
+                boxShadow: planActionPalette.confirmShadow,
+                transition: 'all 0.16s ease',
+                '&:hover': {
+                  bgcolor: planActionPalette.confirmHoverBg,
+                  boxShadow: planActionPalette.confirmHoverShadow,
+                  transform: 'translateY(-1px)',
+                },
+              }}
+              onClick={handleConfirmApply}
+              disabled={isApplying}
+            >
+              {isApplying ? 'Applying...' : 'Confirm'}
+            </Button>
+            </Box>
+          </Box>
+        )}
       </Box>
     </Box>
   );

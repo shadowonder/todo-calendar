@@ -117,8 +117,13 @@ function OverflowTooltipText({ text }) {
   );
 }
 
-export default function TaskPanel({ selectedDate, onMutate, nativeChatStatus = { enabled: false, phase: 'idle', tier: '' } }) {
-  const { tasks, createTask, setDone, deleteTask, editTask, updateColor, togglePrioritized, reorderTask } = useTasks(selectedDate);
+export default function TaskPanel({
+  selectedDate,
+  onMutate,
+  nativeChatStatus = { enabled: false, phase: 'idle', tier: '' },
+  tasksReloadNonce = 0,
+}) {
+  const { tasks, createTask, setDone, deleteTask, editTask, updateColor, togglePrioritized, reorderTask, reload } = useTasks(selectedDate);
   const { defaultTaskType } = useSettings();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
@@ -159,6 +164,11 @@ export default function TaskPanel({ selectedDate, onMutate, nativeChatStatus = {
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [chatMessages, activeTab]);
+
+  useEffect(() => {
+    if (!tasksReloadNonce) return;
+    void reload();
+  }, [tasksReloadNonce, reload]);
 
   const sendChat = async () => {
     const text = chatInput.trim();
