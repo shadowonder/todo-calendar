@@ -226,7 +226,7 @@ function getClient({
   const client = azureEnabled
     ? new AzureOpenAI({
       apiKey,
-      baseURL,
+      endpoint: baseURL,
       apiVersion: azureApiVersion,
       ...(modelHeaders ? { defaultHeaders: modelHeaders } : {}),
       dangerouslyAllowBrowser: true,
