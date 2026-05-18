@@ -18,6 +18,7 @@
 import { buildSystemPrompt } from '../prompts/basePrompt.js';
 import { askWithOpenAI, askWithOpenAIStructured } from './providers/openaiProvider.js';
 import { askWithWebLLM, preloadWebLLM, unloadWebLLM } from './providers/webllmProvider.js';
+import { resolveRestApiKey } from './providers/restAuthProvider.js';
 
 function normalizeMessages(messages) {
   if (!Array.isArray(messages)) return [];
@@ -32,9 +33,18 @@ function normalizeMessages(messages) {
 export function getProviderLabel(connection) {
   if (connection?.type === 'native') return 'Native Model';
   if (connection?.type === 'apikey') return 'OpenAI';
-  if (connection?.type === 'oauth') return 'OAuth (pending)';
-  if (connection?.type === 'restapi') return 'REST API (pending)';
+  if (connection?.type === 'restapi') return 'REST API Token';
   return 'Unknown';
+}
+
+async function resolveRestApiConnection(connection, signal) {
+  const key = await resolveRestApiKey({ connection, signal });
+  return {
+    type: 'apikey',
+    modelUrl: connection?.modelUrl || '',
+    modelVersion: connection?.modelVersion || '',
+    auth: { key },
+  };
 }
 
 export async function requestAssistantReply({
@@ -67,8 +77,15 @@ export async function requestAssistantReply({
     });
   }
 
-  if (connection?.type === 'oauth' || connection?.type === 'restapi') {
-    throw new Error(`Connection type "${connection.type}" is not implemented yet for chat.`);
+  if (connection?.type === 'restapi') {
+    const delegated = await resolveRestApiConnection(connection, signal);
+    return askWithOpenAI({
+      connection: delegated,
+      messages: normalizedMessages,
+      systemPrompt,
+      signal,
+      onStream,
+    });
   }
 
   throw new Error('Unknown AI connection type. Please check Settings.');
@@ -124,8 +141,17 @@ export async function requestStructuredOutput({
     });
   }
 
-  if (connection?.type === 'oauth' || connection?.type === 'restapi') {
-    throw new Error(`Connection type "${connection.type}" is not implemented yet for structured output.`);
+  if (connection?.type === 'restapi') {
+    const delegated = await resolveRestApiConnection(connection, signal);
+    const preferVercelSdk = Boolean(context?.modelInput?.preferVercelSdk);
+    return askWithOpenAIStructured({
+      connection: preferVercelSdk
+        ? { ...delegated, useVercelAiSdk: true }
+        : delegated,
+      messages,
+      systemPrompt,
+      signal,
+    });
   }
 
   throw new Error('Unknown AI connection type. Please check Settings.');

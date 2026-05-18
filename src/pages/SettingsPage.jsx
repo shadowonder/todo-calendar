@@ -45,7 +45,6 @@ export default function SettingsPage() {
     setAiConnectionType,
     updateAiNative,
     updateAiApiKey,
-    updateAiOauth,
     updateAiRest,
   } = useSettings();
   const [snack, setSnack] = useState({ open: false, message: '', severity: 'success' });
@@ -54,8 +53,8 @@ export default function SettingsPage() {
     setSnack({ open: true, message, severity });
   };
 
-  const tabToType = ['apikey', 'oauth', 'restapi'];
-  const typeToTab = { apikey: 0, oauth: 1, restapi: 2 };
+  const tabToType = ['apikey', 'restapi'];
+  const typeToTab = { apikey: 0, restapi: 1 };
   const connectionTab = typeToTab[activeExternalType] ?? 0;
   const nativeHints = useMemo(() => getNativeRuntimeHints(), []);
   const nativeSelection = useMemo(
@@ -254,7 +253,6 @@ export default function SettingsPage() {
                       sx={{ borderBottom: 1, borderColor: 'divider' }}
                     >
                       <Tab label="API Key" />
-                      <Tab label="OAuth" />
                       <Tab label="REST API" />
                     </Tabs>
 
@@ -274,40 +272,6 @@ export default function SettingsPage() {
                       )}
 
                       {connectionTab === 1 && (
-                        <>
-                          <TextField
-                            fullWidth
-                            size="small"
-                            label="Auth URL"
-                            placeholder="https://auth.example.com/oauth/token"
-                            value={aiConnection.oauth.url}
-                            onChange={(e) => {
-                              void updateAiOauth({ url: e.target.value });
-                            }}
-                          />
-                          <TextField
-                            fullWidth
-                            size="small"
-                            label="Client ID"
-                            value={aiConnection.oauth.clientId}
-                            onChange={(e) => {
-                              void updateAiOauth({ clientId: e.target.value });
-                            }}
-                          />
-                          <TextField
-                            fullWidth
-                            size="small"
-                            type="password"
-                            label="Client Secret"
-                            value={aiConnection.oauth.clientSecret}
-                            onChange={(e) => {
-                              void updateAiOauth({ clientSecret: e.target.value });
-                            }}
-                          />
-                        </>
-                      )}
-
-                      {connectionTab === 2 && (
                         <>
                           <TextField
                             fullWidth
@@ -333,6 +297,19 @@ export default function SettingsPage() {
                           <TextField
                             fullWidth
                             size="small"
+                            label="Headers"
+                            multiline
+                            minRows={3}
+                            placeholder={`{\n  "Content-Type": "application/json"\n}`}
+                            value={aiConnection.rest.headers}
+                            onChange={(e) => {
+                              void updateAiRest({ headers: e.target.value });
+                            }}
+                            sx={{ '& .MuiInputBase-input': { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' } }}
+                          />
+                          <TextField
+                            fullWidth
+                            size="small"
                             label="Body"
                             multiline
                             minRows={5}
@@ -342,6 +319,16 @@ export default function SettingsPage() {
                               void updateAiRest({ requestBody: e.target.value });
                             }}
                             sx={{ '& .MuiInputBase-input': { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' } }}
+                          />
+                          <TextField
+                            fullWidth
+                            size="small"
+                            label="Response Field"
+                            placeholder="api.response[0].token"
+                            value={aiConnection.rest.responseField}
+                            onChange={(e) => {
+                              void updateAiRest({ responseField: e.target.value });
+                            }}
                           />
                         </>
                       )}

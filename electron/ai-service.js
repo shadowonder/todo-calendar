@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import axios from 'axios';
 
 const clientCache = new Map();
 const DEFAULT_OPENAI_MODEL = 'gpt-4.1-mini';
@@ -56,6 +57,38 @@ function extractText(content) {
   return '';
 }
 
+function normalizeAuthMethod(method) {
+  return String(method || '').toUpperCase() === 'GET' ? 'GET' : 'POST';
+}
+
+function normalizeAuthHeaders(rawHeaders) {
+  if (!rawHeaders || typeof rawHeaders !== 'object' || Array.isArray(rawHeaders)) return {};
+  const headers = {};
+  for (const [key, value] of Object.entries(rawHeaders)) {
+    const name = String(key || '').trim();
+    if (!name) continue;
+    if (value === null || value === undefined) continue;
+    headers[name] = String(value);
+  }
+  return headers;
+}
+
+/**
+ * Keep auth request options permissive and let upstream APIs return business errors.
+ * We only normalize method/headers and pass body/params through.
+ */
+function buildRestAuthRequestConfig(payload = {}) {
+  const method = normalizeAuthMethod(payload?.method);
+  const headers = normalizeAuthHeaders(payload?.headers);
+  const body = payload?.body === undefined ? null : payload.body;
+  return {
+    url: typeof payload?.url === 'string' ? payload.url.trim() : '',
+    method,
+    headers,
+    body,
+  };
+}
+
 export async function chatOpenAI(payload = {}) {
   const apiKey = typeof payload?.apiKey === 'string' ? payload.apiKey.trim() : '';
   if (!apiKey) {
@@ -83,5 +116,31 @@ export async function chatOpenAI(payload = {}) {
   return {
     text,
     model: completion?.model || model,
+  };
+}
+
+export async function requestRestAuth(payload = {}) {
+  const { url, method, headers, body } = buildRestAuthRequestConfig(payload);
+  if (!url) {
+    throw new Error('REST auth URL is empty.');
+  }
+
+  const response = await axios.request({
+    url,
+    method,
+    headers,
+    validateStatus: () => true,
+    ...(method === 'GET' && body && typeof body === 'object' && !Array.isArray(body)
+      ? { params: body }
+      : {}),
+    ...(method === 'GET' && body !== null && (typeof body !== 'object' || Array.isArray(body))
+      ? { params: { payload: JSON.stringify(body) } }
+      : {}),
+    ...(method === 'POST' && body !== null ? { data: body } : {}),
+  });
+
+  return {
+    status: response.status,
+    data: response.data,
   };
 }

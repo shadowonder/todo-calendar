@@ -40,7 +40,7 @@ Many todo apps are list-first and weak on calendar workflows. Many calendar apps
 
 - Native mode: local WebLLM (WebGPU required)
 - API Key mode: OpenAI-compatible endpoint
-- OAuth / REST API settings are present as extension-ready options
+- REST API settings are present as extension-ready options
 
 ### 4) Theme + Settings
 

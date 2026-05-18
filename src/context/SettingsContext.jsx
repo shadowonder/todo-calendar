@@ -8,8 +8,8 @@ import { NATIVE_MODEL_TIER_OPTION_IDS } from '../ai/nativeModels.js';
 
 const isElectron = () => typeof window !== 'undefined' && !!window.db;
 
-const AI_TYPES = new Set(['native', 'apikey', 'oauth', 'restapi']);
-const NON_NATIVE_TYPES = new Set(['apikey', 'oauth', 'restapi']);
+const AI_TYPES = new Set(['native', 'apikey', 'restapi']);
+const NON_NATIVE_TYPES = new Set(['apikey', 'restapi']);
 const DEFAULT_AI_CONNECTION = {
   type: 'native',
   lastNonNativeType: 'apikey',
@@ -22,30 +22,64 @@ const DEFAULT_AI_CONNECTION = {
   apiKey: {
     key: '',
   },
-  oauth: {
-    url: '',
-    clientId: '',
-    clientSecret: '',
-  },
   rest: {
     url: '',
     method: 'POST',
+    headers: '',
     requestBody: '',
+    responseField: 'token',
   },
 };
 
+function mapLegacyExternalType(type) {
+  return type === 'oauth' ? 'restapi' : type;
+}
+
+function buildLegacyOauthRequestBody(oauth) {
+  const clientId = typeof oauth?.clientId === 'string' ? oauth.clientId.trim() : '';
+  const clientSecret = typeof oauth?.clientSecret === 'string' ? oauth.clientSecret.trim() : '';
+  if (!clientId && !clientSecret) return DEFAULT_AI_CONNECTION.rest.requestBody;
+  return JSON.stringify(
+    {
+      ...(clientId ? { client_id: clientId } : {}),
+      ...(clientSecret ? { client_secret: clientSecret } : {}),
+    },
+    null,
+    2
+  );
+}
+
 function normalizeAiConnection(raw) {
   const v = raw && typeof raw === 'object' ? raw : {};
-  const type = AI_TYPES.has(v.type) ? v.type : DEFAULT_AI_CONNECTION.type;
+  const normalizedType = mapLegacyExternalType(v.type);
+  const type = AI_TYPES.has(normalizedType) ? normalizedType : DEFAULT_AI_CONNECTION.type;
+  const normalizedLastNonNativeType = mapLegacyExternalType(v.lastNonNativeType);
+  const legacyOauthUrl = typeof v?.oauth?.url === 'string' ? v.oauth.url : '';
+  const restUrl =
+    typeof v?.rest?.url === 'string' && v.rest.url.trim()
+      ? v.rest.url
+      : legacyOauthUrl;
   const inferredNonNativeType = (() => {
-    if (NON_NATIVE_TYPES.has(v.lastNonNativeType)) return v.lastNonNativeType;
+    if (NON_NATIVE_TYPES.has(normalizedLastNonNativeType)) return normalizedLastNonNativeType;
     if (NON_NATIVE_TYPES.has(type)) return type;
-    if (typeof v?.oauth?.url === 'string' && v.oauth.url.trim()) return 'oauth';
-    if (typeof v?.rest?.url === 'string' && v.rest.url.trim()) return 'restapi';
+    if (typeof restUrl === 'string' && restUrl.trim()) return 'restapi';
     if (typeof v?.apiKey?.key === 'string' && v.apiKey.key.trim()) return 'apikey';
     return DEFAULT_AI_CONNECTION.lastNonNativeType;
   })();
   const restMethod = String(v?.rest?.method || '').toUpperCase() === 'GET' ? 'GET' : 'POST';
+  const restHeaders =
+    typeof v?.rest?.headers === 'string'
+      ? v.rest.headers
+      : (typeof v?.rest?.header === 'string' ? v.rest.header : DEFAULT_AI_CONNECTION.rest.headers);
+  const restRequestBody =
+    typeof v?.rest?.requestBody === 'string'
+      ? v.rest.requestBody
+      : buildLegacyOauthRequestBody(v?.oauth);
+  const restResponseField =
+    // Default to "token" so legacy configs without this field still work out of the box.
+    typeof v?.rest?.responseField === 'string' && v.rest.responseField.trim()
+      ? v.rest.responseField
+      : DEFAULT_AI_CONNECTION.rest.responseField;
 
   return {
     type,
@@ -64,15 +98,12 @@ function normalizeAiConnection(raw) {
     apiKey: {
       key: typeof v?.apiKey?.key === 'string' ? v.apiKey.key : DEFAULT_AI_CONNECTION.apiKey.key,
     },
-    oauth: {
-      url: typeof v?.oauth?.url === 'string' ? v.oauth.url : DEFAULT_AI_CONNECTION.oauth.url,
-      clientId: typeof v?.oauth?.clientId === 'string' ? v.oauth.clientId : DEFAULT_AI_CONNECTION.oauth.clientId,
-      clientSecret: typeof v?.oauth?.clientSecret === 'string' ? v.oauth.clientSecret : DEFAULT_AI_CONNECTION.oauth.clientSecret,
-    },
     rest: {
-      url: typeof v?.rest?.url === 'string' ? v.rest.url : DEFAULT_AI_CONNECTION.rest.url,
+      url: restUrl,
       method: restMethod,
-      requestBody: typeof v?.rest?.requestBody === 'string' ? v.rest.requestBody : DEFAULT_AI_CONNECTION.rest.requestBody,
+      headers: restHeaders,
+      requestBody: restRequestBody,
+      responseField: restResponseField,
     },
   };
 }
@@ -96,7 +127,6 @@ const SettingsContext = createContext({
   setAiModelVersion: async () => {},
   updateAiNative: async () => {},
   updateAiApiKey: async () => {},
-  updateAiOauth: async () => {},
   updateAiRest: async () => {},
 });
 
@@ -122,14 +152,6 @@ export function SettingsProvider({ children }) {
         modelUrl: '',
         modelVersion: '',
         auth: { ...aiConnection.native },
-      };
-    }
-    if (activeExternalType === 'oauth') {
-      return {
-        type: 'oauth',
-        modelUrl: aiConnection.modelUrl,
-        modelVersion: aiConnection.modelVersion,
-        auth: { ...aiConnection.oauth },
       };
     }
     if (activeExternalType === 'restapi') {
@@ -235,13 +257,6 @@ export function SettingsProvider({ children }) {
     }));
   };
 
-  const updateAiOauth = async (patch = {}) => {
-    await setAiConnection((prev) => ({
-      ...prev,
-      oauth: { ...prev.oauth, ...patch },
-    }));
-  };
-
   const updateAiRest = async (patch = {}) => {
     await setAiConnection((prev) => ({
       ...prev,
@@ -265,7 +280,6 @@ export function SettingsProvider({ children }) {
         setAiModelVersion,
         updateAiNative,
         updateAiApiKey,
-        updateAiOauth,
         updateAiRest,
       }}
     >

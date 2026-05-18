@@ -48,5 +48,6 @@ contextBridge.exposeInMainWorld('db', {
   // AI
   ai: {
     chatOpenAI: (payload) => ipcRenderer.invoke('ai:chatOpenAI', payload),
+    requestRestAuth: (payload) => ipcRenderer.invoke('ai:requestRestAuth', payload),
   },
 });
