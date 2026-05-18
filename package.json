@@ -1,6 +1,6 @@
 {
   "name": "todo-calendar",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "license": "MIT",
   "private": true,
   "description": "Todo Calendar - React + Electron app",
@@ -10,7 +10,10 @@
     "dev:web": "vite",
     "dev": "NODE_ENV=development concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "build": "vite build",
-    "pack": "npm run build && electron-builder --dir",
+    "pack": "npm run build && electron-builder --mac --win nsis portable",
+    "pack:mac": "npm run build && electron-builder --mac",
+    "pack:win": "npm run build && electron-builder --win nsis",
+    "pack:win-portable": "npm run build && electron-builder --win portable",
     "dist": "npm run build && electron-builder",
     "preview": "vite preview",
     "lint": "eslint . --ext .js,.jsx"
@@ -59,7 +62,8 @@
     ],
     "mac": {
       "target": "dmg",
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "identity": "-"
     },
     "win": {
       "target": "nsis"
