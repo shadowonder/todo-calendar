@@ -90,11 +90,13 @@ jobs:
           echo "next_tag=${next_tag}" >> "$GITHUB_OUTPUT"
 
       - name: Create major/minor tag
+        env:
+          RELEASE_TAG_TOKEN: ${{ secrets.RELEASE_TAG_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
 
           tag="${{ steps.semver.outputs.next_tag }}"
-
+          git remote set-url origin "https://x-access-token:${RELEASE_TAG_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git tag "${tag}"
           git push origin "${tag}"
