@@ -15,6 +15,8 @@ const DEFAULT_AI_CONNECTION = {
   lastNonNativeType: 'apikey',
   modelUrl: '',
   modelVersion: '',
+  modelHeaders: '',
+  azureEnabled: false,
   native: {
     memoryQuota: '',
     modelTier: 'auto',
@@ -30,6 +32,45 @@ const DEFAULT_AI_CONNECTION = {
     responseField: 'token',
   },
 };
+
+/**
+ * Build the runtime connection consumed by modelRouter.
+ * This keeps selection logic in one place and avoids drift across branches.
+ */
+function buildEffectiveAiConnection(aiConnection, { isNativeMode, activeExternalType }) {
+  const shared = {
+    modelHeaders: aiConnection.modelHeaders,
+    azureEnabled: aiConnection.azureEnabled,
+  };
+
+  if (isNativeMode) {
+    return {
+      type: 'native',
+      modelUrl: '',
+      modelVersion: '',
+      ...shared,
+      auth: { ...aiConnection.native },
+    };
+  }
+
+  if (activeExternalType === 'restapi') {
+    return {
+      type: 'restapi',
+      modelUrl: aiConnection.modelUrl,
+      modelVersion: aiConnection.modelVersion,
+      ...shared,
+      auth: { ...aiConnection.rest },
+    };
+  }
+
+  return {
+    type: 'apikey',
+    modelUrl: aiConnection.modelUrl,
+    modelVersion: aiConnection.modelVersion,
+    ...shared,
+    auth: { ...aiConnection.apiKey },
+  };
+}
 
 function mapLegacyExternalType(type) {
   return type === 'oauth' ? 'restapi' : type;
@@ -86,6 +127,8 @@ function normalizeAiConnection(raw) {
     lastNonNativeType: inferredNonNativeType,
     modelUrl: typeof v.modelUrl === 'string' ? v.modelUrl : DEFAULT_AI_CONNECTION.modelUrl,
     modelVersion: typeof v.modelVersion === 'string' ? v.modelVersion : DEFAULT_AI_CONNECTION.modelVersion,
+    modelHeaders: typeof v.modelHeaders === 'string' ? v.modelHeaders : DEFAULT_AI_CONNECTION.modelHeaders,
+    azureEnabled: v?.azureEnabled === true,
     native: {
       memoryQuota:
         v?.native?.memoryQuota === null || v?.native?.memoryQuota === undefined
@@ -117,6 +160,8 @@ const SettingsContext = createContext({
     type: 'native',
     modelUrl: '',
     modelVersion: '',
+    modelHeaders: '',
+    azureEnabled: false,
     auth: null,
   },
   setSetting: async () => {},
@@ -125,6 +170,8 @@ const SettingsContext = createContext({
   setNativeMode: async () => {},
   setAiModelUrl: async () => {},
   setAiModelVersion: async () => {},
+  setAiModelHeaders: async () => {},
+  setAiAzureEnabled: async () => {},
   updateAiNative: async () => {},
   updateAiApiKey: async () => {},
   updateAiRest: async () => {},
@@ -144,31 +191,10 @@ export function SettingsProvider({ children }) {
       ? aiConnection.type
       : (NON_NATIVE_TYPES.has(aiConnection.lastNonNativeType) ? aiConnection.lastNonNativeType : 'apikey');
   const isNativeMode = aiConnection.type === 'native';
-
-  const effectiveAiConnection = (() => {
-    if (isNativeMode) {
-      return {
-        type: 'native',
-        modelUrl: '',
-        modelVersion: '',
-        auth: { ...aiConnection.native },
-      };
-    }
-    if (activeExternalType === 'restapi') {
-      return {
-        type: 'restapi',
-        modelUrl: aiConnection.modelUrl,
-        modelVersion: aiConnection.modelVersion,
-        auth: { ...aiConnection.rest },
-      };
-    }
-    return {
-      type: 'apikey',
-      modelUrl: aiConnection.modelUrl,
-      modelVersion: aiConnection.modelVersion,
-      auth: { ...aiConnection.apiKey },
-    };
-  })();
+  const effectiveAiConnection = buildEffectiveAiConnection(
+    aiConnection,
+    { isNativeMode, activeExternalType }
+  );
 
   // Load all settings from DB on mount
   useEffect(() => {
@@ -235,34 +261,27 @@ export function SettingsProvider({ children }) {
     await setAiConnectionType(activeExternalType);
   };
 
-  const setAiModelUrl = async (modelUrl) => {
-    await setAiConnection((prev) => ({ ...prev, modelUrl: String(modelUrl ?? '') }));
+  const setAiStringField = (field) => async (value) => {
+    await setAiConnection((prev) => ({ ...prev, [field]: String(value ?? '') }));
   };
-
-  const setAiModelVersion = async (modelVersion) => {
-    await setAiConnection((prev) => ({ ...prev, modelVersion: String(modelVersion ?? '') }));
-  };
-
-  const updateAiNative = async (patch = {}) => {
+  const patchAiSection = (section) => async (patch = {}) => {
     await setAiConnection((prev) => ({
       ...prev,
-      native: { ...prev.native, ...patch },
+      [section]: { ...prev[section], ...patch },
     }));
   };
 
-  const updateAiApiKey = async (patch = {}) => {
-    await setAiConnection((prev) => ({
-      ...prev,
-      apiKey: { ...prev.apiKey, ...patch },
-    }));
+  const setAiModelUrl = setAiStringField('modelUrl');
+  const setAiModelVersion = setAiStringField('modelVersion');
+  const setAiModelHeaders = setAiStringField('modelHeaders');
+
+  const setAiAzureEnabled = async (enabled) => {
+    await setAiConnection((prev) => ({ ...prev, azureEnabled: Boolean(enabled) }));
   };
 
-  const updateAiRest = async (patch = {}) => {
-    await setAiConnection((prev) => ({
-      ...prev,
-      rest: { ...prev.rest, ...patch },
-    }));
-  };
+  const updateAiNative = patchAiSection('native');
+  const updateAiApiKey = patchAiSection('apiKey');
+  const updateAiRest = patchAiSection('rest');
 
   return (
     <SettingsContext.Provider
@@ -278,6 +297,8 @@ export function SettingsProvider({ children }) {
         setNativeMode,
         setAiModelUrl,
         setAiModelVersion,
+        setAiModelHeaders,
+        setAiAzureEnabled,
         updateAiNative,
         updateAiApiKey,
         updateAiRest,

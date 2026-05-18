@@ -14,7 +14,7 @@
  * - progressively migrate OpenAI calls to Vercel AI SDK from this provider
  *   without changing pipeline.js / steps/.
  */
-import OpenAI from 'openai';
+import OpenAI, { AzureOpenAI } from 'openai';
 import { generateObject } from 'ai';
 import { createOpenAI as createVercelOpenAI } from '@ai-sdk/openai';
 import { z } from 'zod';
@@ -55,6 +55,23 @@ function resolveRequestedModel(connection) {
   return modelVersion || DEFAULT_OPENAI_MODEL;
 }
 
+function isAzureMode(connection) {
+  return connection?.azureEnabled === true;
+}
+
+/**
+ * In Azure mode, `modelVersion` is repurposed as the API version string.
+ */
+function resolveAzureApiVersion(connection) {
+  const apiVersion = typeof connection?.modelVersion === 'string'
+    ? connection.modelVersion.trim()
+    : '';
+  if (!apiVersion) {
+    throw new Error('Azure mode requires API Version in Settings -> Model Connection -> Model Version.');
+  }
+  return apiVersion;
+}
+
 function normalizeBaseURL(modelUrl) {
   const raw = typeof modelUrl === 'string' ? modelUrl.trim() : '';
   if (!raw) return undefined;
@@ -72,6 +89,59 @@ function normalizeBaseURL(modelUrl) {
   } catch {
     return raw;
   }
+}
+
+/**
+ * Parse optional model-level headers from Settings.
+ * The field is expected to be a JSON object string.
+ */
+function parseModelHeaders(rawHeaders) {
+  const raw = typeof rawHeaders === 'string' ? rawHeaders.trim() : '';
+  if (!raw) return undefined;
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('Model headers must be valid JSON in Settings -> Model Connection -> Model Headers.');
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Model headers must be a JSON object in Settings -> Model Connection -> Model Headers.');
+  }
+
+  const headers = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    const name = String(key || '').trim();
+    if (!name || value === null || value === undefined) continue;
+    headers[name] = typeof value === 'string' ? value : String(value);
+  }
+  return headers;
+}
+
+function buildHeadersCacheKey(headers) {
+  return headers ? JSON.stringify(headers) : '';
+}
+
+/**
+ * Resolve all connection-dependent runtime options once per call.
+ * This keeps request branches focused on transport differences only.
+ */
+function resolveConnectionContext(connection) {
+  const apiKey = connection?.auth?.key?.trim();
+  if (!apiKey) {
+    throw new Error('OpenAI API key is empty. Please set it in Settings -> Model Connection -> API Key.');
+  }
+
+  const azureEnabled = isAzureMode(connection);
+  return {
+    apiKey,
+    azureEnabled,
+    azureApiVersion: azureEnabled ? resolveAzureApiVersion(connection) : '',
+    baseURL: normalizeBaseURL(connection?.modelUrl),
+    requestedModel: azureEnabled ? '' : resolveRequestedModel(connection),
+    modelHeaders: parseModelHeaders(connection?.modelHeaders),
+  };
 }
 
 function toOpenAIMessages(messages, systemPrompt) {
@@ -107,25 +177,12 @@ function toVercelPrompt(messages, systemPrompt) {
   return lines.join('\n').trim();
 }
 
-function extractText(content) {
-  if (typeof content === 'string') return content.trim();
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === 'string') return part;
-        if (typeof part?.text === 'string') return part.text;
-        return '';
-      })
-      .join('\n')
-      .trim();
-  }
-  return '';
-}
-
-function extractStreamText(content) {
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content
+function extractText(content, trim = true) {
+  let text = '';
+  if (typeof content === 'string') {
+    text = content;
+  } else if (Array.isArray(content)) {
+    text = content
       .map((part) => {
         if (typeof part === 'string') return part;
         if (typeof part?.text === 'string') return part.text;
@@ -133,7 +190,7 @@ function extractStreamText(content) {
       })
       .join('\n');
   }
-  return '';
+  return trim ? text.trim() : text;
 }
 
 function emitStreamUpdate(onStream, rawText, model, done = false) {
@@ -152,29 +209,66 @@ function getElectronOpenAIBridge() {
   return typeof fn === 'function' ? fn : null;
 }
 
-function getClient({ apiKey, baseURL }) {
-  const key = `${baseURL || 'default'}::${apiKey}`;
+/**
+ * Build either OpenAI or AzureOpenAI client with cache segregation by mode/options.
+ */
+function getClient({
+  apiKey,
+  baseURL,
+  azureEnabled = false,
+  azureApiVersion = '',
+  modelHeaders = undefined,
+}) {
+  const headerKey = buildHeadersCacheKey(modelHeaders);
+  const key = `${azureEnabled ? 'azure' : 'openai'}::${baseURL || 'default'}::${apiKey}::${azureApiVersion}::${headerKey}`;
   if (clientCache.has(key)) return clientCache.get(key);
 
-  const client = new OpenAI({
-    apiKey,
-    baseURL,
-    dangerouslyAllowBrowser: true,
-  });
+  const client = azureEnabled
+    ? new AzureOpenAI({
+      apiKey,
+      baseURL,
+      apiVersion: azureApiVersion,
+      ...(modelHeaders ? { defaultHeaders: modelHeaders } : {}),
+      dangerouslyAllowBrowser: true,
+    })
+    : new OpenAI({
+      apiKey,
+      baseURL,
+      dangerouslyAllowBrowser: true,
+    });
   clientCache.set(key, client);
   return client;
 }
 
-function getVercelProvider({ apiKey, baseURL }) {
-  const key = `${baseURL || 'default'}::${apiKey}`;
+function getVercelProvider({ apiKey, baseURL, headers }) {
+  const headerKey = buildHeadersCacheKey(headers);
+  const key = `${baseURL || 'default'}::${apiKey}::${headerKey}`;
   if (vercelProviderCache.has(key)) return vercelProviderCache.get(key);
 
   const provider = createVercelOpenAI({
     apiKey,
     ...(baseURL ? { baseURL } : {}),
+    ...(headers ? { headers } : {}),
   });
   vercelProviderCache.set(key, provider);
   return provider;
+}
+
+/**
+ * Build chat completion payload with mode-specific shape.
+ * Azure mode omits `model` because deployment is expected in the URL path.
+ */
+function buildChatRequestBody({ azureEnabled, requestedModel, openAIMessages, responseFormat, stream = false }) {
+  const body = {
+    temperature: 0.3,
+    messages: openAIMessages,
+    ...(stream ? { stream: true } : {}),
+    ...(responseFormat ? { response_format: responseFormat } : {}),
+  };
+  if (!azureEnabled) {
+    body.model = requestedModel;
+  }
+  return body;
 }
 
 export async function askWithOpenAI({
@@ -185,21 +279,30 @@ export async function askWithOpenAI({
   onStream,
   responseFormat,
 }) {
-  const apiKey = connection?.auth?.key?.trim();
-  if (!apiKey) {
-    throw new Error('OpenAI API key is empty. Please set it in Settings -> Model Connection -> API Key.');
-  }
-
-  const baseURL = normalizeBaseURL(connection?.modelUrl);
-  const requestedModel = resolveRequestedModel(connection);
+  const {
+    apiKey,
+    azureEnabled,
+    azureApiVersion,
+    baseURL,
+    requestedModel,
+    modelHeaders,
+  } = resolveConnectionContext(connection);
+  const openAIMessages = toOpenAIMessages(messages, systemPrompt);
   const electronOpenAI = responseFormat ? null : getElectronOpenAIBridge();
+  const requestOptions = {
+    ...(signal ? { signal } : {}),
+    ...(modelHeaders ? { headers: modelHeaders } : {}),
+  };
 
   if (electronOpenAI) {
     const response = await electronOpenAI({
       apiKey,
       modelUrl: baseURL || '',
-      model: requestedModel,
-      messages: toOpenAIMessages(messages, systemPrompt),
+      model: requestedModel || null,
+      azureEnabled,
+      apiVersion: azureApiVersion || null,
+      modelHeaders: modelHeaders || null,
+      messages: openAIMessages,
     });
     const rawText = extractText(response?.text);
     const text = sanitizeAssistantText(rawText);
@@ -216,7 +319,13 @@ export async function askWithOpenAI({
     };
   }
 
-  const client = getClient({ apiKey, baseURL });
+  const client = getClient({
+    apiKey,
+    baseURL,
+    azureEnabled,
+    azureApiVersion,
+    modelHeaders,
+  });
 
   // When structured JSON schema format is requested, keep non-streaming mode
   // to avoid provider-specific streaming format edge cases.
@@ -224,13 +333,13 @@ export async function askWithOpenAI({
 
   if (useStreaming) {
     const stream = await client.chat.completions.create(
-      {
-        model: requestedModel,
-        temperature: 0.3,
-        messages: toOpenAIMessages(messages, systemPrompt),
+      buildChatRequestBody({
+        azureEnabled,
+        requestedModel,
+        openAIMessages,
         stream: true,
-      },
-      { signal }
+      }),
+      requestOptions
     );
 
     let rawText = '';
@@ -239,7 +348,7 @@ export async function askWithOpenAI({
       if (typeof chunk?.model === 'string' && chunk.model.trim()) {
         streamModel = chunk.model;
       }
-      const piece = extractStreamText(chunk?.choices?.[0]?.delta?.content);
+      const piece = extractText(chunk?.choices?.[0]?.delta?.content, false);
       if (!piece) continue;
       rawText += piece;
       emitStreamUpdate(onStream, rawText, streamModel, false);
@@ -257,13 +366,14 @@ export async function askWithOpenAI({
   }
 
   const completion = await client.chat.completions.create(
-    {
-      model: requestedModel,
-      temperature: 0.3,
-      messages: toOpenAIMessages(messages, systemPrompt),
-      ...(responseFormat ? { response_format: responseFormat } : {}),
-    },
-    { signal }
+    buildChatRequestBody({
+      azureEnabled,
+      requestedModel,
+      openAIMessages,
+      responseFormat,
+      stream: false,
+    }),
+    requestOptions
   );
 
   const rawContent = extractText(completion?.choices?.[0]?.message?.content);
@@ -290,13 +400,18 @@ export async function askWithOpenAIStructured({
   systemPrompt,
   signal,
 }) {
-  const apiKey = connection?.auth?.key?.trim();
-  if (!apiKey) {
-    throw new Error('OpenAI API key is empty. Please set it in Settings -> Model Connection -> API Key.');
+  const { apiKey, azureEnabled, baseURL, requestedModel, modelHeaders } = resolveConnectionContext(connection);
+  if (azureEnabled) {
+    // Keep Azure structured mode on OpenAI SDK branch for consistent Azure request shape.
+    return askWithOpenAI({
+      connection,
+      messages,
+      systemPrompt,
+      signal,
+      responseFormat: { type: 'json_object' },
+    });
   }
 
-  const baseURL = normalizeBaseURL(connection?.modelUrl);
-  const requestedModel = resolveRequestedModel(connection);
   const useVercelSdk = connection?.runtime?.openaiSdk === 'vercel-ai'
     || connection?.modelProvider === 'vercel-ai'
     || connection?.useVercelAiSdk === true;
@@ -314,7 +429,7 @@ export async function askWithOpenAIStructured({
     });
   }
 
-  const provider = getVercelProvider({ apiKey, baseURL });
+  const provider = getVercelProvider({ apiKey, baseURL, headers: modelHeaders });
   const prompt = toVercelPrompt(messages, systemPrompt);
   const result = await generateObject({
     model: provider(requestedModel),

@@ -1,8 +1,12 @@
-import OpenAI from 'openai';
+import OpenAI, { AzureOpenAI } from 'openai';
 import axios from 'axios';
 
 const clientCache = new Map();
 const DEFAULT_OPENAI_MODEL = 'gpt-4.1-mini';
+
+function buildHeadersCacheKey(headers) {
+  return headers ? JSON.stringify(headers) : '';
+}
 
 function normalizeBaseURL(modelUrl) {
   const raw = typeof modelUrl === 'string' ? modelUrl.trim() : '';
@@ -23,11 +27,28 @@ function normalizeBaseURL(modelUrl) {
   }
 }
 
-function getClient({ apiKey, baseURL }) {
-  const key = `${baseURL || 'default'}::${apiKey}`;
+/**
+ * Build either OpenAI or AzureOpenAI client, keyed by mode and headers to avoid cross-mode reuse.
+ */
+function getClient({
+  apiKey,
+  baseURL,
+  azureEnabled = false,
+  azureApiVersion = '',
+  modelHeaders = undefined,
+}) {
+  const headerKey = buildHeadersCacheKey(modelHeaders);
+  const key = `${azureEnabled ? 'azure' : 'openai'}::${baseURL || 'default'}::${apiKey}::${azureApiVersion}::${headerKey}`;
   if (clientCache.has(key)) return clientCache.get(key);
 
-  const client = new OpenAI({ apiKey, baseURL });
+  const client = azureEnabled
+    ? new AzureOpenAI({
+      apiKey,
+      baseURL,
+      apiVersion: azureApiVersion,
+      ...(modelHeaders ? { defaultHeaders: modelHeaders } : {}),
+    })
+    : new OpenAI({ apiKey, baseURL });
   clientCache.set(key, client);
   return client;
 }
@@ -61,8 +82,12 @@ function normalizeAuthMethod(method) {
   return String(method || '').toUpperCase() === 'GET' ? 'GET' : 'POST';
 }
 
-function normalizeAuthHeaders(rawHeaders) {
-  if (!rawHeaders || typeof rawHeaders !== 'object' || Array.isArray(rawHeaders)) return {};
+/**
+ * Normalize a plain-object headers input by trimming keys and stringifying values.
+ * Invalid shapes return the provided empty result (`{}` for auth, `undefined` for model headers).
+ */
+function normalizeHeadersObject(rawHeaders, emptyResult = {}) {
+  if (!rawHeaders || typeof rawHeaders !== 'object' || Array.isArray(rawHeaders)) return emptyResult;
   const headers = {};
   for (const [key, value] of Object.entries(rawHeaders)) {
     const name = String(key || '').trim();
@@ -70,7 +95,39 @@ function normalizeAuthHeaders(rawHeaders) {
     if (value === null || value === undefined) continue;
     headers[name] = String(value);
   }
-  return headers;
+  return Object.keys(headers).length > 0 ? headers : emptyResult;
+}
+
+function isAzureMode(payload = {}) {
+  return payload?.azureEnabled === true;
+}
+
+/**
+ * In Azure mode, renderer sends API version via `modelVersion` semantic field.
+ */
+function resolveAzureApiVersion(payload = {}) {
+  const apiVersion = typeof payload?.apiVersion === 'string'
+    ? payload.apiVersion.trim()
+    : '';
+  if (!apiVersion) {
+    throw new Error('Azure mode requires API Version.');
+  }
+  return apiVersion;
+}
+
+/**
+ * Build chat body with provider-specific shape.
+ * Azure mode omits `model` because deployment is expected in URL path.
+ */
+function buildChatBody({ azureEnabled, model, messages }) {
+  const body = {
+    temperature: 0.3,
+    messages,
+  };
+  if (!azureEnabled && model) {
+    body.model = model;
+  }
+  return body;
 }
 
 /**
@@ -79,7 +136,7 @@ function normalizeAuthHeaders(rawHeaders) {
  */
 function buildRestAuthRequestConfig(payload = {}) {
   const method = normalizeAuthMethod(payload?.method);
-  const headers = normalizeAuthHeaders(payload?.headers);
+  const headers = normalizeHeadersObject(payload?.headers, {});
   const body = payload?.body === undefined ? null : payload.body;
   return {
     url: typeof payload?.url === 'string' ? payload.url.trim() : '',
@@ -89,24 +146,55 @@ function buildRestAuthRequestConfig(payload = {}) {
   };
 }
 
-export async function chatOpenAI(payload = {}) {
+/**
+ * Resolve chat payload once so transport code does not repeat parsing branches.
+ */
+function resolveChatPayload(payload = {}) {
   const apiKey = typeof payload?.apiKey === 'string' ? payload.apiKey.trim() : '';
   if (!apiKey) {
     throw new Error('OpenAI API key is empty.');
   }
 
-  const model = typeof payload?.model === 'string' && payload.model.trim()
-    ? payload.model.trim()
-    : DEFAULT_OPENAI_MODEL;
-  const baseURL = normalizeBaseURL(payload?.modelUrl);
-  const messages = normalizeMessages(payload?.messages);
-  const client = getClient({ apiKey, baseURL });
+  const azureEnabled = isAzureMode(payload);
+  return {
+    apiKey,
+    azureEnabled,
+    azureApiVersion: azureEnabled ? resolveAzureApiVersion(payload) : '',
+    model: typeof payload?.model === 'string' && payload.model.trim()
+      ? payload.model.trim()
+      : DEFAULT_OPENAI_MODEL,
+    baseURL: normalizeBaseURL(payload?.modelUrl),
+    messages: normalizeMessages(payload?.messages),
+    modelHeaders: normalizeHeadersObject(payload?.modelHeaders, undefined),
+  };
+}
 
-  const completion = await client.chat.completions.create({
+export async function chatOpenAI(payload = {}) {
+  const {
+    apiKey,
+    azureEnabled,
+    azureApiVersion,
     model,
-    temperature: 0.3,
+    baseURL,
     messages,
+    modelHeaders,
+  } = resolveChatPayload(payload);
+  const client = getClient({
+    apiKey,
+    baseURL,
+    azureEnabled,
+    azureApiVersion,
+    modelHeaders,
   });
+
+  const completion = await client.chat.completions.create(
+    buildChatBody({
+      azureEnabled,
+      model,
+      messages,
+    }),
+    modelHeaders ? { headers: modelHeaders } : undefined
+  );
 
   const text = extractText(completion?.choices?.[0]?.message?.content);
   if (!text) {

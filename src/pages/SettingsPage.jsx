@@ -15,6 +15,7 @@ import {
   Alert,
   Tabs,
   Tab,
+  Collapse,
   TextField,
   Button,
 } from '@mui/material';
@@ -31,6 +32,15 @@ import {
   getTierLabel,
 } from '../ai/nativeModels.js';
 
+const TAB_TO_TYPE = ['apikey', 'restapi'];
+const TYPE_TO_TAB = { apikey: 0, restapi: 1 };
+const SECTION_TITLE_SX = { textTransform: 'uppercase', letterSpacing: 1 };
+const MONOSPACE_INPUT_SX = {
+  '& .MuiInputBase-input': {
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+  },
+};
+
 export default function SettingsPage() {
   const { darkMode, toggleDarkMode } = useColorMode();
   const {
@@ -42,20 +52,22 @@ export default function SettingsPage() {
     setNativeMode,
     setAiModelUrl,
     setAiModelVersion,
+    setAiModelHeaders,
+    setAiAzureEnabled,
     setAiConnectionType,
     updateAiNative,
     updateAiApiKey,
     updateAiRest,
   } = useSettings();
   const [snack, setSnack] = useState({ open: false, message: '', severity: 'success' });
+  const [showModelHeaders, setShowModelHeaders] = useState(false);
 
   const showSnack = (message, severity = 'success') => {
     setSnack({ open: true, message, severity });
   };
 
-  const tabToType = ['apikey', 'restapi'];
-  const typeToTab = { apikey: 0, restapi: 1 };
-  const connectionTab = typeToTab[activeExternalType] ?? 0;
+  const connectionTab = TYPE_TO_TAB[activeExternalType] ?? 0;
+  const azureEnabled = aiConnection.azureEnabled === true;
   const nativeHints = useMemo(() => getNativeRuntimeHints(), []);
   const nativeSelection = useMemo(
     () => resolveNativeModelSelection(aiConnection.native, nativeHints),
@@ -68,7 +80,13 @@ export default function SettingsPage() {
   })();
 
   return (
-    <Box sx={{ p: 3, maxWidth: 600 }}>
+    <Box
+      sx={{
+        p: 3,
+        // Responsive width: fill small screens, grow with page width, but stay within min/max bounds.
+        width: 'min(100%, clamp(680px, 82vw, 980px))',
+      }}
+    >
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 3 }}>
         <SettingsIcon color="primary" />
         <Typography variant="h6" fontWeight={700}>
@@ -82,7 +100,7 @@ export default function SettingsPage() {
           <ListItem sx={{ bgcolor: 'action.hover' }}>
             <ListItemText
               primary={
-                <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 1 }}>
+                <Typography variant="caption" fontWeight={700} color="text.secondary" sx={SECTION_TITLE_SX}>
                   Appearance
                 </Typography>
               }
@@ -106,7 +124,7 @@ export default function SettingsPage() {
           <ListItem sx={{ bgcolor: 'action.hover' }}>
             <ListItemText
               primary={
-                <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 1 }}>
+                <Typography variant="caption" fontWeight={700} color="text.secondary" sx={SECTION_TITLE_SX}>
                   Tasks
                 </Typography>
               }
@@ -222,7 +240,7 @@ export default function SettingsPage() {
                     fullWidth
                     size="small"
                     label="Model URL"
-                    placeholder="https://api.example.com/v1/responses"
+                    placeholder={azureEnabled ? 'https://your-resource.openai.azure.com/openai/deployments/your-deployment' : 'https://api.example.com/v1/responses'}
                     value={aiConnection.modelUrl}
                     onChange={(e) => {
                       void setAiModelUrl(e.target.value);
@@ -233,8 +251,8 @@ export default function SettingsPage() {
                   <TextField
                     fullWidth
                     size="small"
-                    label="Model Version"
-                    placeholder="gpt-4.1-mini"
+                    label={azureEnabled ? 'API Version' : 'Model Version'}
+                    placeholder={azureEnabled ? '2024-10-21' : 'gpt-4.1-mini'}
                     value={aiConnection.modelVersion}
                     onChange={(e) => {
                       void setAiModelVersion(e.target.value);
@@ -242,11 +260,70 @@ export default function SettingsPage() {
                     sx={{ mt: 1.2 }}
                   />
 
+                  <Box
+                    sx={{
+                      mt: 1.2,
+                      px: 1.25,
+                      py: 1,
+                      border: 1,
+                      borderColor: 'divider',
+                      borderRadius: 1.25,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 1.5,
+                    }}
+                  >
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography variant="body2" fontWeight={700}>
+                        Use Azure OpenAI
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {azureEnabled
+                          ? 'Model Version field is treated as Azure API version.'
+                          : 'Turn on when your API key and endpoint are for Azure OpenAI.'}
+                      </Typography>
+                    </Box>
+                    <Switch
+                      size="small"
+                      checked={azureEnabled}
+                      onChange={(e) => {
+                        void setAiAzureEnabled(e.target.checked);
+                      }}
+                    />
+                  </Box>
+
+                  <Box sx={{ mt: 0.8 }}>
+                    <Button
+                      size="small"
+                      variant="text"
+                      onClick={() => setShowModelHeaders((prev) => !prev)}
+                    >
+                      {showModelHeaders ? 'Hide Model Headers' : 'Show Model Headers (Advanced)'}
+                    </Button>
+
+                    <Collapse in={showModelHeaders}>
+                      <TextField
+                        fullWidth
+                        size="small"
+                        label="Model Headers"
+                        multiline
+                        minRows={3}
+                        placeholder={`{\n  "projectId": "your-project-id"\n}`}
+                        value={aiConnection.modelHeaders}
+                        onChange={(e) => {
+                          void setAiModelHeaders(e.target.value);
+                        }}
+                        sx={{ mt: 0.8, ...MONOSPACE_INPUT_SX }}
+                      />
+                    </Collapse>
+                  </Box>
+
                   <Box sx={{ mt: 1.5, border: 1, borderColor: 'divider', borderRadius: 1.5, overflow: 'hidden' }}>
                     <Tabs
                       value={connectionTab}
                       onChange={(_, v) => {
-                        const nextType = tabToType[v] || 'apikey';
+                        const nextType = TAB_TO_TYPE[v] || 'apikey';
                         void setAiConnectionType(nextType);
                       }}
                       variant="fullWidth"
@@ -262,8 +339,8 @@ export default function SettingsPage() {
                           fullWidth
                           size="small"
                           type="password"
-                          label="API Key"
-                          placeholder="sk-..."
+                          label={azureEnabled ? 'Azure API Key' : 'API Key'}
+                          placeholder={azureEnabled ? 'azure-api-key-...' : 'sk-...'}
                           value={aiConnection.apiKey.key}
                           onChange={(e) => {
                             void updateAiApiKey({ key: e.target.value });
@@ -305,7 +382,7 @@ export default function SettingsPage() {
                             onChange={(e) => {
                               void updateAiRest({ headers: e.target.value });
                             }}
-                            sx={{ '& .MuiInputBase-input': { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' } }}
+                            sx={MONOSPACE_INPUT_SX}
                           />
                           <TextField
                             fullWidth
@@ -318,7 +395,7 @@ export default function SettingsPage() {
                             onChange={(e) => {
                               void updateAiRest({ requestBody: e.target.value });
                             }}
-                            sx={{ '& .MuiInputBase-input': { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' } }}
+                            sx={MONOSPACE_INPUT_SX}
                           />
                           <TextField
                             fullWidth
@@ -354,7 +431,7 @@ export default function SettingsPage() {
           <ListItem sx={{ bgcolor: 'action.hover' }}>
             <ListItemText
               primary={
-                <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 1 }}>
+                <Typography variant="caption" fontWeight={700} color="text.secondary" sx={SECTION_TITLE_SX}>
                   About
                 </Typography>
               }

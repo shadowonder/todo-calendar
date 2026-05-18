@@ -32,8 +32,8 @@ function normalizeMessages(messages) {
 
 export function getProviderLabel(connection) {
   if (connection?.type === 'native') return 'Native Model';
-  if (connection?.type === 'apikey') return 'OpenAI';
-  if (connection?.type === 'restapi') return 'REST API Token';
+  if (connection?.type === 'apikey') return connection?.azureEnabled ? 'Azure OpenAI' : 'OpenAI';
+  if (connection?.type === 'restapi') return connection?.azureEnabled ? 'REST API Token (Azure)' : 'REST API Token';
   return 'Unknown';
 }
 
@@ -43,8 +43,20 @@ async function resolveRestApiConnection(connection, signal) {
     type: 'apikey',
     modelUrl: connection?.modelUrl || '',
     modelVersion: connection?.modelVersion || '',
+    modelHeaders: connection?.modelHeaders || '',
+    azureEnabled: connection?.azureEnabled === true,
     auth: { key },
   };
+}
+
+/**
+ * Convert externally-configured auth modes into an OpenAI-compatible connection.
+ * `apikey` is used directly; `restapi` is resolved into a temporary API key.
+ */
+async function resolveOpenAIConnection(connection, signal) {
+  if (connection?.type === 'apikey') return connection;
+  if (connection?.type === 'restapi') return resolveRestApiConnection(connection, signal);
+  return null;
 }
 
 export async function requestAssistantReply({
@@ -67,20 +79,10 @@ export async function requestAssistantReply({
     });
   }
 
-  if (connection?.type === 'apikey') {
+  const openAIConnection = await resolveOpenAIConnection(connection, signal);
+  if (openAIConnection) {
     return askWithOpenAI({
-      connection,
-      messages: normalizedMessages,
-      systemPrompt,
-      signal,
-      onStream,
-    });
-  }
-
-  if (connection?.type === 'restapi') {
-    const delegated = await resolveRestApiConnection(connection, signal);
-    return askWithOpenAI({
-      connection: delegated,
+      connection: openAIConnection,
       messages: normalizedMessages,
       systemPrompt,
       signal,
@@ -119,6 +121,7 @@ export async function requestStructuredOutput({
     ? context.modelInput.systemPrompt
     : '';
   const messages = buildStructuredMessages(context);
+  const preferVercelSdk = Boolean(context?.modelInput?.preferVercelSdk);
 
   if (connection?.type === 'native') {
     return askWithWebLLM({
@@ -129,25 +132,12 @@ export async function requestStructuredOutput({
     });
   }
 
-  if (connection?.type === 'apikey') {
-    const preferVercelSdk = Boolean(context?.modelInput?.preferVercelSdk);
+  const openAIConnection = await resolveOpenAIConnection(connection, signal);
+  if (openAIConnection) {
     return askWithOpenAIStructured({
       connection: preferVercelSdk
-        ? { ...connection, useVercelAiSdk: true }
-        : connection,
-      messages,
-      systemPrompt,
-      signal,
-    });
-  }
-
-  if (connection?.type === 'restapi') {
-    const delegated = await resolveRestApiConnection(connection, signal);
-    const preferVercelSdk = Boolean(context?.modelInput?.preferVercelSdk);
-    return askWithOpenAIStructured({
-      connection: preferVercelSdk
-        ? { ...delegated, useVercelAiSdk: true }
-        : delegated,
+        ? { ...openAIConnection, useVercelAiSdk: true }
+        : openAIConnection,
       messages,
       systemPrompt,
       signal,
