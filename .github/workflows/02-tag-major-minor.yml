@@ -30,24 +30,6 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_TAG_TOKEN }}
 
-      - name: Validate token
-        env:
-          RELEASE_TAG_TOKEN: ${{ secrets.RELEASE_TAG_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -z "${RELEASE_TAG_TOKEN}" ]]; then
-            echo "RELEASE_TAG_TOKEN is required for this workflow."
-            echo "Add it in: Settings -> Secrets and variables -> Actions -> New repository secret"
-            exit 1
-          fi
-
-      - name: Extra mask token in logs
-        env:
-          RELEASE_TAG_TOKEN: ${{ secrets.RELEASE_TAG_TOKEN }}
-        shell: bash
-        run: echo "::add-mask::${RELEASE_TAG_TOKEN}"
-
       - name: Compute next major/minor tag
         id: semver
         shell: bash
@@ -90,13 +72,10 @@ jobs:
           echo "next_tag=${next_tag}" >> "$GITHUB_OUTPUT"
 
       - name: Create major/minor tag
-        env:
-          RELEASE_TAG_TOKEN: ${{ secrets.RELEASE_TAG_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
 
           tag="${{ steps.semver.outputs.next_tag }}"
-          git remote set-url origin "https://x-access-token:${RELEASE_TAG_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git tag "${tag}"
           git push origin "${tag}"
