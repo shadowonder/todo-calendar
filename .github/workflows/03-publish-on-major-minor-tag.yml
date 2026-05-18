@@ -186,8 +186,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm run build
-          npx electron-builder --win nsis portable
+          npm run pack:win
+          npm run pack:win-portable
 
       - name: Upload artifacts to GitHub release
         env:
@@ -199,9 +199,7 @@ jobs:
           tag="${{ needs.prepare.outputs.tag }}"
           mapfile -d '' files < <(find dist-electron -maxdepth 1 -type f \( \
             -name '*.dmg' -o \
-            -name '*.exe' -o \
-            -name '*.yml' -o \
-            -name '*.blockmap' \
+            -name '*.exe' \
           \) -print0)
 
           if [[ "${#files[@]}" -eq 0 ]]; then

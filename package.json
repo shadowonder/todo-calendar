@@ -11,9 +11,9 @@
     "dev": "NODE_ENV=development concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "build": "vite build",
     "pack": "npm run build && electron-builder --mac --win nsis portable",
-    "pack:mac": "npm run build && electron-builder --mac",
-    "pack:win": "npm run build && electron-builder --win nsis",
-    "pack:win-portable": "npm run build && electron-builder --win portable",
+    "pack:mac": "npm run build && electron-builder --mac --arm64",
+    "pack:win": "npm run build && electron-builder --win nsis --x64",
+    "pack:win-portable": "npm run build && electron-builder --win portable --x64",
     "dist": "npm run build && electron-builder",
     "preview": "vite preview",
     "lint": "eslint . --ext .js,.jsx"

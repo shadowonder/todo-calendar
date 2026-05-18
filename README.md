@@ -108,9 +108,9 @@ npm run lint
 ```bash
 npm run build      # Production web build -> dist/
 npm run pack       # mac dmg + windows nsis + windows portable
-npm run pack:mac   # mac only
-npm run pack:win   # windows nsis only
-npm run pack:win-portable  # windows portable only
+npm run pack:mac   # mac arm64 only
+npm run pack:win   # windows nsis x64 only
+npm run pack:win-portable  # windows portable x64 only
 npm run dist       # installers by build config defaults
 ```
 
