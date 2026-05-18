@@ -1,0 +1,60 @@
+name: tag-patch-on-main
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tag-patch-main
+  cancel-in-progress: false
+
+jobs:
+  tag-patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next patch tag
+        id: semver
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch --tags --force
+          latest="$(git tag --list 'v*' --sort=-version:refname | head -n1)"
+
+          if [[ -z "${latest}" ]]; then
+            latest="v0.0.0"
+          fi
+
+          if [[ ! "${latest}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "Latest tag '${latest}' is not in vX.Y.Z format."
+            exit 1
+          fi
+
+          major="${BASH_REMATCH[1]}"
+          minor="${BASH_REMATCH[2]}"
+          patch="${BASH_REMATCH[3]}"
+          next_patch=$((patch + 1))
+          next_tag="v${major}.${minor}.${next_patch}"
+
+          echo "latest=${latest}" >> "$GITHUB_OUTPUT"
+          echo "next_tag=${next_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Create patch tag
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${{ steps.semver.outputs.next_tag }}"
+          git tag -a "${tag}" -m "chore(release): ${tag} [patch]"
+          git push origin "${tag}"

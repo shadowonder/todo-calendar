@@ -1,0 +1,212 @@
+name: publish-on-major-minor-tag
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Semver tag to publish (example: v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.meta.outputs.should_release }}
+      tag: ${{ steps.meta.outputs.tag }}
+      release_type: ${{ steps.meta.outputs.release_type }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve tag and release type
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            tag="${{ github.event.inputs.tag }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+
+          if [[ ! "${tag}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "Tag '${tag}' is not in vX.Y.Z format."
+            exit 1
+          fi
+
+          major="${BASH_REMATCH[1]}"
+          minor="${BASH_REMATCH[2]}"
+          patch="${BASH_REMATCH[3]}"
+
+          if [[ "${patch}" -ne 0 ]]; then
+            echo "Tag ${tag} is patch-only; publish pipeline will skip."
+            echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+            echo "release_type=patch" >> "$GITHUB_OUTPUT"
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "${minor}" -eq 0 ]]; then
+            release_type="major"
+          else
+            release_type="minor"
+          fi
+
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "release_type=${release_type}" >> "$GITHUB_OUTPUT"
+          echo "should_release=true" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes from patch commits
+        if: steps.meta.outputs.should_release == 'true'
+        id: notes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          current_tag="${{ steps.meta.outputs.tag }}"
+          git fetch --tags --force
+
+          previous_release_tag="$(git tag --list 'v*' --sort=-version:refname \
+            | grep -E '^v[0-9]+\.[0-9]+\.0$' \
+            | grep -v "^${current_tag}$" \
+            | head -n1 || true)"
+
+          {
+            echo "## Changes"
+            echo
+
+            if [[ -n "${previous_release_tag}" ]]; then
+              echo "_From ${previous_release_tag} to ${current_tag}_"
+              echo
+              git log "${previous_release_tag}..${current_tag}" --pretty=format:'- %s (%h)' | sed '/^$/d'
+            else
+              echo "_Initial release ${current_tag}_"
+              echo
+              git log "${current_tag}" --pretty=format:'- %s (%h)' | sed '/^$/d'
+            fi
+          } > release_notes.md
+
+          if ! grep -q '^- ' release_notes.md; then
+            echo "- No user-facing changes." >> release_notes.md
+          fi
+
+      - name: Upload release notes artifact
+        if: steps.meta.outputs.should_release == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release_notes.md
+          if-no-files-found: error
+
+  create-release:
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download release notes artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${{ needs.prepare.outputs.tag }}"
+
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release edit "${tag}" --title "${tag}" --notes-file release_notes.md
+          else
+            gh release create "${tag}" --title "${tag}" --notes-file release_notes.md
+          fi
+
+  build-and-upload:
+    needs: [prepare, create-release]
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+          - os: windows-latest
+            platform: win
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        shell: bash
+        run: npm ci
+
+      - name: Sync package version to tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.prepare.outputs.tag }}"
+          npm --no-git-tag-version version "${version#v}"
+
+      - name: Build mac artifacts
+        if: matrix.platform == 'mac'
+        shell: bash
+        run: npm run pack:mac
+
+      - name: Build windows artifacts (nsis + portable)
+        if: matrix.platform == 'win'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build
+          npx electron-builder --win nsis portable
+
+      - name: Upload artifacts to GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${{ needs.prepare.outputs.tag }}"
+          mapfile -d '' files < <(find dist-electron -maxdepth 1 -type f \( \
+            -name '*.dmg' -o \
+            -name '*.exe' -o \
+            -name '*.yml' -o \
+            -name '*.blockmap' \
+          \) -print0)
+
+          if [[ "${#files[@]}" -eq 0 ]]; then
+            echo "No release artifacts found in dist-electron"
+            exit 1
+          fi
+
+          gh release upload "${tag}" "${files[@]}" --clobber

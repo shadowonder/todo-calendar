@@ -1,0 +1,96 @@
+name: tag-major-minor
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Which version part to bump
+        required: true
+        default: minor
+        type: choice
+        options:
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tag-major-minor
+  cancel-in-progress: false
+
+jobs:
+  tag-major-minor:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate token
+        env:
+          RELEASE_TAG_TOKEN: ${{ secrets.RELEASE_TAG_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${RELEASE_TAG_TOKEN}" ]]; then
+            echo "RELEASE_TAG_TOKEN is required for this workflow."
+            echo "Add it in: Settings -> Secrets and variables -> Actions -> New repository secret"
+            exit 1
+          fi
+
+      - name: Compute next major/minor tag
+        id: semver
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bump="${{ github.event.inputs.bump }}"
+          git fetch --tags --force
+          latest="$(git tag --list 'v*' --sort=-version:refname | head -n1)"
+
+          if [[ -z "${latest}" ]]; then
+            latest="v0.0.0"
+          fi
+
+          if [[ ! "${latest}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "Latest tag '${latest}' is not in vX.Y.Z format."
+            exit 1
+          fi
+
+          major="${BASH_REMATCH[1]}"
+          minor="${BASH_REMATCH[2]}"
+
+          if [[ "${bump}" == "major" ]]; then
+            major=$((major + 1))
+            minor=0
+            patch=0
+          else
+            minor=$((minor + 1))
+            patch=0
+          fi
+
+          next_tag="v${major}.${minor}.${patch}"
+
+          if git rev-parse "${next_tag}" >/dev/null 2>&1; then
+            echo "Tag ${next_tag} already exists."
+            exit 1
+          fi
+
+          echo "latest=${latest}" >> "$GITHUB_OUTPUT"
+          echo "next_tag=${next_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Create major/minor tag
+        env:
+          RELEASE_TAG_TOKEN: ${{ secrets.RELEASE_TAG_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${{ steps.semver.outputs.next_tag }}"
+          mode="${{ github.event.inputs.bump }}"
+
+          git tag -a "${tag}" -m "chore(release): ${tag} [${mode}]"
+          git push "https://x-access-token:${RELEASE_TAG_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "${tag}"
